@@ -113,6 +113,7 @@ static DWORD NormalizeModifierVkFromConfig(DWORD vk, UINT scanCodeWithFlags = 0)
 }
 
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
+    if (uMsg != WM_MOUSEMOVE) { return { false, 0 }; }
     PROFILE_SCOPE("HandleMouseMoveViewportOffset");
     // Legacy compatibility path intentionally disabled.
     // Mouse translation is handled centrally in HandleMouseCoordinateTranslationPhase.
@@ -160,16 +161,19 @@ static LRESULT EncodeToolscreenVersionNumber() {
 }
 
 InputHandlerResult HandleToolscreenQueryMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    const UINT isInstalledMsg = GetToolscreenIsInstalledMessageId();
+    const UINT getVersionMsg = GetToolscreenGetVersionMessageId();
+    if (uMsg != isInstalledMsg && uMsg != getVersionMsg) { return { false, 0 }; }
     PROFILE_SCOPE("HandleToolscreenQueryMessages");
     (void)hWnd;
     (void)wParam;
     (void)lParam;
 
-    if (uMsg == GetToolscreenIsInstalledMessageId()) {
+    if (uMsg == isInstalledMsg) {
         return { true, 1 };
     }
 
-    if (uMsg == GetToolscreenGetVersionMessageId()) {
+    if (uMsg == getVersionMsg) {
         return { true, EncodeToolscreenVersionNumber() };
     }
 
@@ -191,9 +195,8 @@ void HandleCharLogging(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 }
 
 InputHandlerResult HandleWindowPosChanged(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    PROFILE_SCOPE("HandleWindowPosChanged");
-
     if (uMsg != WM_WINDOWPOSCHANGED) { return { false, 0 }; }
+    PROFILE_SCOPE("HandleWindowPosChanged");
 
     auto forwardToOriginal = [&]() -> InputHandlerResult {
         if (g_originalWndProc) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
@@ -250,9 +253,10 @@ InputHandlerResult HandleWindowPosChanged(HWND hWnd, UINT uMsg, WPARAM wParam, L
 }
 
 InputHandlerResult HandleAltF4(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_SYSKEYDOWN) { return { false, 0 }; }
     PROFILE_SCOPE("HandleAltF4");
 
-    if (uMsg == WM_SYSKEYDOWN && wParam == VK_F4) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
+    if (wParam == VK_F4) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
     return { false, 0 };
 }
 
@@ -287,9 +291,8 @@ InputHandlerResult HandleConfigLoadFailure(HWND hWnd, UINT uMsg, WPARAM wParam, 
 }
 
 InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& gameState) {
-    PROFILE_SCOPE("HandleSetCursor");
-
     if (uMsg != WM_SETCURSOR) { return { false, 0 }; }
+    PROFILE_SCOPE("HandleSetCursor");
 
     if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
@@ -312,9 +315,8 @@ InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 }
 
 InputHandlerResult HandleDestroy(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    PROFILE_SCOPE("HandleDestroy");
-
     if (uMsg != WM_DESTROY) { return { false, 0 }; }
+    PROFILE_SCOPE("HandleDestroy");
 
     extern GameVersion g_gameVersion;
     if (g_gameVersion >= GameVersion(1, 13, 0)) { g_isShuttingDown = true; }
@@ -333,6 +335,17 @@ InputHandlerResult HandleImGuiInput(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 }
 
 InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+        break;
+    default:
+        return { false, 0 };
+    }
     PROFILE_SCOPE("HandleGuiToggle");
 
     DWORD vkCode = 0;
@@ -472,6 +485,17 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 }
 
 InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+        break;
+    default:
+        return { false, 0 };
+    }
     PROFILE_SCOPE("HandleBorderlessToggle");
 
     if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
@@ -520,6 +544,17 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
 }
 
 InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+        break;
+    default:
+        return { false, 0 };
+    }
     PROFILE_SCOPE("HandleImageOverlaysToggle");
 
     if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
@@ -570,6 +605,17 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
 }
 
 InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+        break;
+    default:
+        return { false, 0 };
+    }
     PROFILE_SCOPE("HandleWindowOverlaysToggle");
 
     if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
@@ -624,6 +670,7 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
 }
 
 InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_KEYDOWN && uMsg != WM_KEYUP && uMsg != WM_SYSKEYDOWN && uMsg != WM_SYSKEYUP) { return { false, 0 }; }
     PROFILE_SCOPE("HandleWindowOverlayKeyboard");
 
     if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return { false, 0 }; }
@@ -631,8 +678,6 @@ InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wPar
     bool isOverlayInteractionActive = IsWindowOverlayFocused();
 
     if (!isOverlayInteractionActive) { return { false, 0 }; }
-
-    if (uMsg != WM_KEYDOWN && uMsg != WM_KEYUP && uMsg != WM_SYSKEYDOWN && uMsg != WM_SYSKEYUP) { return { false, 0 }; }
 
     // Never query ImGui from this thread. Use state published by render thread.
     bool imguiWantsKeyboard = g_showGui.load() && g_imguiWantCaptureKeyboard.load(std::memory_order_acquire);
@@ -644,11 +689,10 @@ InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wPar
 }
 
 InputHandlerResult HandleWindowOverlayMouse(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg < WM_MOUSEFIRST || uMsg > WM_MOUSELAST) { return { false, 0 }; }
     PROFILE_SCOPE("HandleWindowOverlayMouse");
 
     if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return { false, 0 }; }
-
-    if (uMsg < WM_MOUSEFIRST || uMsg > WM_MOUSELAST) { return { false, 0 }; }
 
     int mouseX, mouseY;
 
@@ -706,10 +750,6 @@ InputHandlerResult HandleWindowOverlayMouse(HWND hWnd, UINT uMsg, WPARAM wParam,
 }
 
 InputHandlerResult HandleGuiInputBlocking(UINT uMsg) {
-    PROFILE_SCOPE("HandleGuiInputBlocking");
-
-    if (!g_showGui.load()) { return { false, 0 }; }
-
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
@@ -729,9 +769,16 @@ InputHandlerResult HandleGuiInputBlocking(UINT uMsg) {
     case WM_XBUTTONUP:
     case WM_XBUTTONDBLCLK:
     case WM_INPUT:
-        return { true, 1 };
+        break;
+    default:
+        return { false, 0 };
     }
-    return { false, 0 };
+
+    PROFILE_SCOPE("HandleGuiInputBlocking");
+
+    if (!g_showGui.load()) { return { false, 0 }; }
+
+    return { true, 1 };
 }
 
 void RestoreWindowsMouseSpeed();
@@ -740,9 +787,8 @@ void RestoreKeyRepeatSettings();
 void ApplyKeyRepeatSettings();
 
 InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId) {
-    PROFILE_SCOPE("HandleActivate");
-
     if (uMsg != WM_ACTIVATE) { return { false, 0 }; }
+    PROFILE_SCOPE("HandleActivate");
 
     if (wParam == WA_INACTIVE) {
         ImGuiInputQueue_EnqueueFocus(false);
@@ -784,6 +830,23 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId,
                                  const std::string& gameState) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+        break;
+    default:
+        return { false, 0 };
+    }
     PROFILE_SCOPE("HandleHotkeys");
 
     DWORD rawVkCode = 0;
@@ -1136,8 +1199,6 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 }
 
 InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
-    PROFILE_SCOPE("HandleMouseCoordinateTranslation");
-
     // Only translate messages whose lParam is already in CLIENT coordinates.
     // Wheel messages use SCREEN coordinates and must not be transformed here.
     switch (uMsg) {
@@ -1158,6 +1219,8 @@ InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, W
     default:
         return { false, 0 };
     }
+
+    PROFILE_SCOPE("HandleMouseCoordinateTranslation");
 
     ModeViewportInfo geo = GetCurrentModeViewport();
     if (!geo.valid || geo.width <= 0 || geo.height <= 0 || geo.stretchWidth <= 0 || geo.stretchHeight <= 0) { return { false, 0 }; }
@@ -1357,6 +1420,23 @@ static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
 }
 
 InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+        break;
+    default:
+        return { false, 0 };
+    }
     PROFILE_SCOPE("HandleKeyRebinding");
 
     if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
@@ -1626,16 +1706,10 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 }
 
 InputHandlerResult HandleCustomKeyNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_TOOLSCREEN_KEYDOWN_NO_REBIND && uMsg != WM_TOOLSCREEN_KEYUP_NO_REBIND) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCustomKeyNoRebind");
 
-    UINT forwardedMsg = 0;
-    if (uMsg == WM_TOOLSCREEN_KEYDOWN_NO_REBIND) {
-        forwardedMsg = WM_KEYDOWN;
-    } else if (uMsg == WM_TOOLSCREEN_KEYUP_NO_REBIND) {
-        forwardedMsg = WM_KEYUP;
-    } else {
-        return { false, 0 };
-    }
+    const UINT forwardedMsg = (uMsg == WM_TOOLSCREEN_KEYDOWN_NO_REBIND) ? WM_KEYDOWN : WM_KEYUP;
 
     if (g_showGui.load()) {
         ImGuiInputQueue_EnqueueWin32Message(hWnd, forwardedMsg, wParam, lParam);
@@ -1647,9 +1721,8 @@ InputHandlerResult HandleCustomKeyNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam, 
 }
 
 InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    PROFILE_SCOPE("HandleCustomCharNoRebind");
-
     if (uMsg != WM_TOOLSCREEN_CHAR_NO_REBIND) { return { false, 0 }; }
+    PROFILE_SCOPE("HandleCustomCharNoRebind");
 
     HandleCharLogging(WM_CHAR, wParam, lParam);
 
@@ -1663,10 +1736,11 @@ InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam,
 }
 
 InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_CHAR) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCharRebinding");
 
     auto charRebindCfg = GetConfigSnapshot();
-    if (uMsg != WM_CHAR || !charRebindCfg || !charRebindCfg->keyRebinds.enabled) { return { false, 0 }; }
+    if (!charRebindCfg || !charRebindCfg->keyRebinds.enabled) { return { false, 0 }; }
 
     WCHAR inputChar = static_cast<WCHAR>(wParam);
 
@@ -1813,10 +1887,7 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleConfigLoadFailure(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    // --- Phase 4: Get Current State (lock-free) ---
-    // Read mode ID from double-buffer atomically
     std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-
     std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
 
     result = HandleSetCursor(hWnd, uMsg, wParam, lParam, localGameState);
