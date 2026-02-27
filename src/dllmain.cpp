@@ -241,7 +241,7 @@ void LoadConfig();
 void SaveConfig();
 void RenderSettingsGUI();
 void AttemptAggressiveGlViewportHook();
-GLuint CalculateGameTextureId(int windowWidth, int windowHeight);
+GLuint CalculateGameTextureId();
 
 
 bool SubclassGameWindow(HWND hwnd) {
@@ -1037,7 +1037,7 @@ void AttemptAggressiveGlViewportHook() {
 }
 
 
-GLuint CalculateGameTextureId(int windowWidth, int windowHeight) {
+GLuint CalculateGameTextureId() {
     ModeViewportInfo viewport = GetCurrentModeViewport();
     if (!viewport.valid) {
         Log("CalculateGameTextureId: Invalid viewport, cannot calculate texture ID");
@@ -1046,12 +1046,6 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight) {
 
     int targetWidth = viewport.width;
     int targetHeight = viewport.height;
-
-    // Texture calibration should follow the actual client area when available.
-    if (windowWidth > 0 && windowHeight > 0) {
-        targetWidth = windowWidth;
-        targetHeight = windowHeight;
-    }
 
     Log("CalculateGameTextureId: Looking for texture with dimensions " + std::to_string(targetWidth) + "x" + std::to_string(targetHeight));
 
@@ -1361,7 +1355,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             GLint gameTextureId = UINT_MAX;
             {
                 PROFILE_SCOPE_CAT("Calculate Game Texture ID", "SwapBuffers");
-                gameTextureId = CalculateGameTextureId(windowWidth, windowHeight);
+                gameTextureId = CalculateGameTextureId();
             }
             if (gameTextureId != UINT_MAX) {
                 g_cachedGameTextureId.store(gameTextureId);
