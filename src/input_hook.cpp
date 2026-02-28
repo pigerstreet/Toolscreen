@@ -1,5 +1,6 @@
 #include "input_hook.h"
 
+#include "expression_parser.h"
 #include "fake_cursor.h"
 #include "gui.h"
 #include "imgui_cache.h"
@@ -15,6 +16,7 @@
 #include "imgui_input_queue.h"
 
 #include <chrono>
+#include <cmath>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -200,6 +202,13 @@ InputHandlerResult HandleWindowPosChanged(HWND hWnd, UINT uMsg, WPARAM wParam, L
     if (uMsg != WM_WINDOWPOSCHANGED) { return { false, 0 }; }
     PROFILE_SCOPE("HandleWindowPosChanged");
 
+    static std::atomic<bool> s_lastKnownFullscreen{ false };
+    static std::atomic<ULONGLONG> s_exitFullscreenClampUntilMs{ 0 };
+    static std::atomic<int> s_exitFullscreenTargetX{ 0 };
+    static std::atomic<int> s_exitFullscreenTargetY{ 0 };
+    static std::atomic<int> s_exitFullscreenTargetW{ 0 };
+    static std::atomic<int> s_exitFullscreenTargetH{ 0 };
+
     auto forwardToOriginal = [&]() -> InputHandlerResult {
         if (g_originalWndProc) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
         return { true, DefWindowProc(hWnd, uMsg, wParam, lParam) };
@@ -229,9 +238,69 @@ InputHandlerResult HandleWindowPosChanged(HWND hWnd, UINT uMsg, WPARAM wParam, L
     Log("[RESIZE] External resize detected to " + std::to_string(currentWidth) + "x" + std::to_string(currentHeight) + " at (" +
         std::to_string(currentX) + "," + std::to_string(currentY) + "), flags=" + std::to_string(flags));
 
+    const bool isFullscreenNow = IsFullscreen();
+    const bool wasFullscreen = s_lastKnownFullscreen.load(std::memory_order_relaxed);
+    s_lastKnownFullscreen.store(isFullscreenNow, std::memory_order_relaxed);
+
+    RECT monitorRect{};
+    if (!GetMonitorRectForWindow(hWnd, monitorRect)) {
+        if (!GetWindowRect(hWnd, &monitorRect)) { return forwardToOriginal(); }
+    }
+    const int monitorW = (monitorRect.right - monitorRect.left);
+    const int monitorH = (monitorRect.bottom - monitorRect.top);
+
+    // Detect fullscreen -> windowed transition and force centered half-screen placement.
+    if (sizeChanged && !isFullscreenNow && wasFullscreen && monitorW > 0 && monitorH > 0) {
+        const int windowedW = (std::max)(1, monitorW / 2);
+        const int windowedH = (std::max)(1, monitorH / 2);
+        const int windowedX = monitorRect.left + (monitorW - windowedW) / 2;
+        const int windowedY = monitorRect.top + (monitorH - windowedH) / 2;
+
+        s_exitFullscreenTargetX.store(windowedX, std::memory_order_relaxed);
+        s_exitFullscreenTargetY.store(windowedY, std::memory_order_relaxed);
+        s_exitFullscreenTargetW.store(windowedW, std::memory_order_relaxed);
+        s_exitFullscreenTargetH.store(windowedH, std::memory_order_relaxed);
+        s_exitFullscreenClampUntilMs.store(GetTickCount64() + 1500ULL, std::memory_order_relaxed);
+
+        Log("[RESIZE] Fullscreen exit detected; forcing centered half-screen window " + std::to_string(windowedW) + "x" +
+            std::to_string(windowedH) + " at (" + std::to_string(windowedX) + "," + std::to_string(windowedY) + ")");
+
+        SetWindowPos(hWnd, HWND_NOTOPMOST, windowedX, windowedY, windowedW, windowedH,
+                     SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        RequestScreenMetricsRecalculation();
+        g_cachedGameTextureId.store(UINT_MAX);
+        return forwardToOriginal();
+    }
+
+    // During the short post-exit window, keep clamping to the forced half-screen target
+    // so delayed external SetWindowPos/WM_SIZE traffic cannot re-shrink/re-jitter the window.
+    const ULONGLONG clampUntil = s_exitFullscreenClampUntilMs.load(std::memory_order_relaxed);
+    if (sizeChanged && !isFullscreenNow && clampUntil != 0 && GetTickCount64() <= clampUntil) {
+        const int targetX = s_exitFullscreenTargetX.load(std::memory_order_relaxed);
+        const int targetY = s_exitFullscreenTargetY.load(std::memory_order_relaxed);
+        const int targetW = s_exitFullscreenTargetW.load(std::memory_order_relaxed);
+        const int targetH = s_exitFullscreenTargetH.load(std::memory_order_relaxed);
+        const int tol = 1;
+        const bool differs = std::abs(currentX - targetX) > tol || std::abs(currentY - targetY) > tol || std::abs(currentWidth - targetW) > tol ||
+                             std::abs(currentHeight - targetH) > tol;
+        if (targetW > 0 && targetH > 0 && differs) {
+            Log("[RESIZE] Clamping post-fullscreen-exit resize back to " + std::to_string(targetW) + "x" + std::to_string(targetH));
+            SetWindowPos(hWnd, HWND_NOTOPMOST, targetX, targetY, targetW, targetH, SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            RequestScreenMetricsRecalculation();
+            g_cachedGameTextureId.store(UINT_MAX);
+            return forwardToOriginal();
+        }
+    }
+
     // In windowed mode, keep user-driven position/size and just refresh dependent caches.
-    if (!IsFullscreen()) {
+    if (!isFullscreenNow) {
         if (sizeChanged) {
+            RECT clientRect{};
+            if (GetClientRect(hWnd, &clientRect)) {
+                const int clientW = clientRect.right - clientRect.left;
+                const int clientH = clientRect.bottom - clientRect.top;
+                UpdateCachedWindowMetricsFromSize(clientW, clientH);
+            }
             RequestScreenMetricsRecalculation();
         } else {
             InvalidateCachedScreenMetrics();
@@ -240,13 +309,11 @@ InputHandlerResult HandleWindowPosChanged(HWND hWnd, UINT uMsg, WPARAM wParam, L
         return forwardToOriginal();
     }
 
-    RECT targetRect{};
-    if (!GetMonitorRectForWindow(hWnd, targetRect)) {
-        if (!GetWindowRect(hWnd, &targetRect)) { return forwardToOriginal(); }
-    }
+    RECT targetRect = monitorRect;
     const int targetW = (targetRect.right - targetRect.left);
     const int targetH = (targetRect.bottom - targetRect.top);
     if (targetW <= 0 || targetH <= 0) { return forwardToOriginal(); }
+
     SetWindowPos(hWnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH, SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 
     g_cachedGameTextureId.store(UINT_MAX);
@@ -714,8 +781,8 @@ InputHandlerResult HandleWindowOverlayMouse(HWND hWnd, UINT uMsg, WPARAM wParam,
         mouseY = GET_Y_LPARAM(lParam);
     }
 
-    const int screenW = GetCachedScreenWidth();
-    const int screenH = GetCachedScreenHeight();
+    const int screenW = GetCachedWindowWidth();
+    const int screenH = GetCachedWindowHeight();
 
     bool isOverlayInteractionActive = IsWindowOverlayFocused();
 
@@ -853,16 +920,54 @@ InputHandlerResult HandleWmSizeModeDimensions(HWND hWnd, UINT uMsg, WPARAM wPara
     if (uMsg != WM_SIZE) { return { false, 0 }; }
     PROFILE_SCOPE("HandleWmSizeModeDimensions");
 
+    if (wParam == SIZE_MINIMIZED) { return { false, 0 }; }
+
+    const int msgW = LOWORD(lParam);
+    const int msgH = HIWORD(lParam);
+    if (msgW <= 0 || msgH <= 0) { return { false, 0 }; }
+
     auto cfgSnap = GetConfigSnapshot();
     const ModeConfig* mode = cfgSnap ? GetModeFromSnapshot(*cfgSnap, currentModeId) : nullptr;
     if (!mode || mode->width <= 0 || mode->height <= 0) { return { false, 0 }; }
 
-    const int msgW = LOWORD(lParam);
-    const int msgH = HIWORD(lParam);
-    if (msgW == mode->width && msgH == mode->height) { return { false, 0 }; }
+    // IMPORTANT: use already-recalculated mode dimensions as authoritative target.
+    // Re-applying relative/expression math against WM_SIZE repeatedly causes compounding
+    // shrink (e.g. 98.4% of 900 -> 885, then 98.4% of 885 -> 870).
+    int targetW = mode->width;
+    int targetH = mode->height;
 
-    const LPARAM adjustedSize = MAKELPARAM(mode->width, mode->height);
-    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, adjustedSize) };
+    // Fullscreen can receive native WM_SIZE before logic-thread recalculation lands.
+    // Recompute only fullscreen dynamic dimensions from current WM_SIZE input so we still
+    // enforce OUR mode (including custom fixed fullscreen), while avoiding stale old values.
+    if (EqualsIgnoreCase(mode->id, "Fullscreen")) {
+        const bool widthIsRelative = mode->widthExpr.empty() && mode->relativeWidth >= 0.0f && mode->relativeWidth <= 1.0f;
+        const bool heightIsRelative = mode->heightExpr.empty() && mode->relativeHeight >= 0.0f && mode->relativeHeight <= 1.0f;
+
+        if (widthIsRelative) {
+            targetW = static_cast<int>(std::lround(mode->relativeWidth * static_cast<float>(msgW)));
+            if (targetW < 1) targetW = 1;
+        }
+        if (heightIsRelative) {
+            targetH = static_cast<int>(std::lround(mode->relativeHeight * static_cast<float>(msgH)));
+            if (targetH < 1) targetH = 1;
+        }
+
+        if (!mode->widthExpr.empty()) {
+            const int evaluatedW = EvaluateExpression(mode->widthExpr, msgW, msgH, targetW);
+            if (evaluatedW > 0) { targetW = evaluatedW; }
+        }
+        if (!mode->heightExpr.empty()) {
+            const int evaluatedH = EvaluateExpression(mode->heightExpr, msgW, msgH, targetH);
+            if (evaluatedH > 0) { targetH = evaluatedH; }
+        }
+    }
+
+    if (targetW <= 0 || targetH <= 0 || (msgW == targetW && msgH == targetH)) { return { false, 0 }; }
+
+    const LPARAM adjustedSize = MAKELPARAM(targetW, targetH);
+    LRESULT forwarded = CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, adjustedSize);
+
+    return { true, forwarded };
 }
 
 InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId,
@@ -1296,19 +1401,21 @@ InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, W
 
     PROFILE_SCOPE("HandleMouseCoordinateTranslation");
 
-    ModeViewportInfo geo{};
-    const CachedModeViewport& cachedMode = g_viewportModeCache[g_viewportModeCacheIndex.load(std::memory_order_acquire)];
-    if (cachedMode.valid) {
-        geo.valid = true;
-        geo.width = cachedMode.width;
-        geo.height = cachedMode.height;
-        geo.stretchEnabled = cachedMode.stretchEnabled;
-        geo.stretchX = cachedMode.stretchX;
-        geo.stretchY = cachedMode.stretchY;
-        geo.stretchWidth = cachedMode.stretchWidth;
-        geo.stretchHeight = cachedMode.stretchHeight;
-    } else {
-        geo = GetCurrentModeViewport();
+    // Prefer live viewport geometry for correctness during/after resize.
+    // Cached mode viewport may lag by a tick and can desync mouse mapping.
+    ModeViewportInfo geo = GetCurrentModeViewport();
+    if (!geo.valid) {
+        const CachedModeViewport& cachedMode = g_viewportModeCache[g_viewportModeCacheIndex.load(std::memory_order_acquire)];
+        if (cachedMode.valid) {
+            geo.valid = true;
+            geo.width = cachedMode.width;
+            geo.height = cachedMode.height;
+            geo.stretchEnabled = cachedMode.stretchEnabled;
+            geo.stretchX = cachedMode.stretchX;
+            geo.stretchY = cachedMode.stretchY;
+            geo.stretchWidth = cachedMode.stretchWidth;
+            geo.stretchHeight = cachedMode.stretchHeight;
+        }
     }
     if (!geo.valid || geo.width <= 0 || geo.height <= 0 || geo.stretchWidth <= 0 || geo.stretchHeight <= 0) { return { false, 0 }; }
 
@@ -2004,7 +2111,18 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     case WM_MOVING:
         InvalidateCachedScreenMetrics();
         break;
-    case WM_SIZE:
+    case WM_SIZE: {
+        // Do not trust WM_SIZE lParam as physical client size here because we may
+        // forward synthetic/enforced WM_SIZE values to the game proc.
+        // Always sample the real client rect from the window itself.
+        RECT clientRect{};
+        if (GetClientRect(hWnd, &clientRect)) {
+            const int clientW = clientRect.right - clientRect.left;
+            const int clientH = clientRect.bottom - clientRect.top;
+            UpdateCachedWindowMetricsFromSize(clientW, clientH);
+        }
+        [[fallthrough]];
+    }
     case WM_SIZING:
     case WM_WINDOWPOSCHANGED:
     case WM_DPICHANGED:

@@ -24,6 +24,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <commdlg.h>
 #include <filesystem>
 #include <fstream>
@@ -1887,8 +1888,8 @@ std::vector<HotkeyConfig> GetDefaultHotkeys() { return GetDefaultHotkeysFromEmbe
 CursorsConfig GetDefaultCursors() { return GetDefaultCursorsFromEmbedded(); }
 
 void WriteDefaultConfig(const std::wstring& path) {
-    int screenWidth = GetCachedScreenWidth();
-    int screenHeight = GetCachedScreenHeight();
+    int screenWidth = GetCachedWindowWidth();
+    int screenHeight = GetCachedWindowHeight();
 
     Config defaultConfig;
     if (LoadEmbeddedDefaultConfig(defaultConfig)) {
@@ -2022,8 +2023,8 @@ void LoadConfig() {
         Log("Loaded config from TOML file.");
 
 
-        int screenWidth = GetCachedScreenWidth();
-        int screenHeight = GetCachedScreenHeight();
+        int screenWidth = GetCachedWindowWidth();
+        int screenHeight = GetCachedWindowHeight();
         if (screenWidth < 1) screenWidth = 1;
         if (screenHeight < 1) screenHeight = 1;
 
@@ -2164,11 +2165,11 @@ void LoadConfig() {
             bool heightIsRelative = mode.heightExpr.empty() && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
 
             if (widthIsRelative && hasClientMetrics) {
-                mode.width = static_cast<int>(mode.relativeWidth * clientWidth);
+                mode.width = static_cast<int>(std::lround(mode.relativeWidth * static_cast<float>(clientWidth)));
                 if (mode.width < 1) mode.width = 1;
             }
             if (heightIsRelative && hasClientMetrics) {
-                mode.height = static_cast<int>(mode.relativeHeight * clientHeight);
+                mode.height = static_cast<int>(std::lround(mode.relativeHeight * static_cast<float>(clientHeight)));
                 if (mode.height < 1) mode.height = 1;
             }
 
@@ -2866,8 +2867,8 @@ void RenderSettingsGUI() {
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowSizeConstraints(ImVec2(500, 400), ImVec2(FLT_MAX, FLT_MAX));
 
-    const int screenWidth = GetCachedScreenWidth();
-    const int screenHeight = GetCachedScreenHeight();
+    const int screenWidth = GetCachedWindowWidth();
+    const int screenHeight = GetCachedWindowHeight();
 
     int windowHeight = static_cast<int>(io.DisplaySize.y);
     {
@@ -3025,7 +3026,7 @@ void InitializeImGuiContext(HWND hwnd) {
         ImGuiIO& io = ImGui::GetIO();
         (void)io;
 
-        const int screenHeight = GetCachedScreenHeight();
+        const int screenHeight = GetCachedWindowHeight();
         float scaleFactor = 1.0f;
         if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
         scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
@@ -3524,7 +3525,7 @@ void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
 
         ImGuiIO& io = ImGui::GetIO();
         (void)io;
-        const int screenHeight = GetCachedScreenHeight();
+        const int screenHeight = GetCachedWindowHeight();
         float scaleFactor = 1.0f;
         if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
         scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;

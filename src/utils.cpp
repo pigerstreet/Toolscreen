@@ -974,8 +974,8 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
 
     int fromWidth = 0, fromHeight = 0, fromX = 0, fromY = 0;
     int toWidth = 0, toHeight = 0, toX = 0, toY = 0;
-    const int fullW = GetCachedScreenWidth();
-    const int fullH = GetCachedScreenHeight();
+    const int fullW = GetCachedWindowWidth();
+    const int fullH = GetCachedWindowHeight();
 
     // Variable to store target mode config (copied to avoid holding lock)
     ModeConfig toModeCopy;
@@ -1305,8 +1305,8 @@ ModeViewportInfo GetCurrentModeViewport_Internal() {
     info.width = mode->width;
     info.height = mode->height;
 
-    int screenW = GetCachedScreenWidth();
-    int screenH = GetCachedScreenHeight();
+    int screenW = GetCachedWindowWidth();
+    int screenH = GetCachedWindowHeight();
 
     info.stretchEnabled = mode->stretch.enabled;
     if (mode->stretch.enabled) {

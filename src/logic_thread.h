@@ -51,8 +51,12 @@ void ProcessPendingModeSwitch();
 void CheckGameStateReset();
 
 // Safe to call from any thread without locking
-int GetCachedScreenWidth();
-int GetCachedScreenHeight();
+int GetCachedWindowWidth();
+int GetCachedWindowHeight();
+
+// Updates cached game-window client metrics immediately from a resize event.
+// Safe to call from the subclassed window thread.
+void UpdateCachedWindowMetricsFromSize(int clientWidth, int clientHeight);
 
 // the game window is currently on. Safe to call from any thread.
 void InvalidateCachedScreenMetrics();

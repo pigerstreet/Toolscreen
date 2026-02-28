@@ -280,8 +280,8 @@ void MirrorRenderConfigFromToml(const toml::table& tbl, MirrorRenderConfig& cfg)
     if (!tbl.contains("useRelativePosition") && xIsPercentage && yIsPercentage) { cfg.useRelativePosition = true; }
 
     if (cfg.useRelativePosition) {
-        int screenW = GetCachedScreenWidth();
-        int screenH = GetCachedScreenHeight();
+        int screenW = GetCachedWindowWidth();
+        int screenH = GetCachedWindowHeight();
 
         if (screenW > 0 && (tbl.contains("relativeX") || xIsPercentage)) {
             cfg.x = static_cast<int>(cfg.relativeX * static_cast<float>(screenW));
@@ -1947,8 +1947,8 @@ bool LoadEmbeddedDefaultConfig(Config& config) {
     }
 }
 
-int GetCachedScreenWidth();
-int GetCachedScreenHeight();
+int GetCachedWindowWidth();
+int GetCachedWindowHeight();
 
 std::vector<ModeConfig> GetDefaultModesFromEmbedded() {
     std::string configStr = GetEmbeddedDefaultConfigString();
@@ -1972,8 +1972,8 @@ std::vector<ModeConfig> GetDefaultModesFromEmbedded() {
             }
         }
 
-        int screenWidth = GetCachedScreenWidth();
-        int screenHeight = GetCachedScreenHeight();
+        int screenWidth = GetCachedWindowWidth();
+        int screenHeight = GetCachedWindowHeight();
 
         for (auto& mode : modes) {
             if (mode.id == "Fullscreen") {
@@ -2162,8 +2162,8 @@ EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded() {
 
         if (auto t = GetTable(tbl, "eyezoom")) { EyeZoomConfigFromToml(*t, eyezoom); }
 
-        int screenWidth = GetCachedScreenWidth();
-        int screenHeight = GetCachedScreenHeight();
+        int screenWidth = GetCachedWindowWidth();
+        int screenHeight = GetCachedWindowHeight();
 
         int horizontalMargin = ((screenWidth / 2) - (384 / 2)) / 20;
         int verticalMargin = (screenHeight / 2) / 4;

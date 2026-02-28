@@ -323,7 +323,7 @@ static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    const int screenHeight = GetCachedScreenHeight();
+    const int screenHeight = GetCachedWindowHeight();
     float scaleFactor = 1.0f;
     if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
     scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
@@ -2650,8 +2650,8 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
                             int groupX = group.output.x;
                             int groupY = group.output.y;
                             if (group.output.useRelativePosition) {
-                                int screenW = GetCachedScreenWidth();
-                                int screenH = GetCachedScreenHeight();
+                                int screenW = GetCachedWindowWidth();
+                                int screenH = GetCachedWindowHeight();
                                 groupX = static_cast<int>(group.output.relativeX * screenW);
                                 groupY = static_cast<int>(group.output.relativeY * screenH);
                             }
@@ -2730,8 +2730,8 @@ static void RenderThreadFunc(void* gameGLContext) {
 
         auto initCfg = GetConfigSnapshot();
         if (initCfg && initCfg->debug.virtualCameraEnabled) {
-            int screenW = GetCachedScreenWidth();
-            int screenH = GetCachedScreenHeight();
+            int screenW = GetCachedWindowWidth();
+            int screenH = GetCachedWindowHeight();
             int vcW, vcH;
             GetVirtualCamScaledSize(screenW, screenH, 1.0f, vcW, vcH);
             if (StartVirtualCamera(vcW, vcH, initCfg->debug.virtualCameraFps)) {
@@ -2766,7 +2766,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-                const int screenHeight = GetCachedScreenHeight();
+                const int screenHeight = GetCachedWindowHeight();
                 float scaleFactor = 1.0f;
                 if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
                 scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
@@ -3357,7 +3357,8 @@ static void RenderThreadFunc(void* gameGLContext) {
                                                                         &g_eyeZoomFontPathCached);
                         if (g_eyeZoomFontPathCached.empty()) { g_eyeZoomFontPathCached = ConfigDefaults::CONFIG_FONT_PATH; }
 
-                        InitializeOverlayTextFont(cfg.fontPath.empty() ? ConfigDefaults::CONFIG_FONT_PATH : cfg.fontPath, 16.0f, g_eyeZoomScaleFactor);
+                        InitializeOverlayTextFont(cfg.fontPath.empty() ? ConfigDefaults::CONFIG_FONT_PATH : cfg.fontPath, 16.0f,
+                                                  g_eyeZoomScaleFactor);
 
                         if (!io.Fonts->Build()) {
                             Log("Render Thread: Font atlas build failed after reload; forcing Arial fallback");

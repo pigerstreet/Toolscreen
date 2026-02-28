@@ -341,8 +341,8 @@ bool ValidateExpression(const std::string& expr, std::string& errorOut) {
 }
 
 void RecalculateExpressionDimensions() {
-    int screenW = GetCachedScreenWidth();
-    int screenH = GetCachedScreenHeight();
+    int screenW = GetCachedWindowWidth();
+    int screenH = GetCachedWindowHeight();
     if (screenW < 1) screenW = 1;
     if (screenH < 1) screenH = 1;
 
@@ -376,12 +376,12 @@ void RecalculateExpressionDimensions() {
         const bool heightIsRelative = mode.id != "Preemptive" && mode.heightExpr.empty() && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
 
         if (widthIsRelative) {
-            int newWidth = static_cast<int>(mode.relativeWidth * static_cast<float>(screenW));
+            int newWidth = static_cast<int>(std::lround(mode.relativeWidth * static_cast<float>(screenW)));
             if (newWidth < 1) newWidth = 1;
             mode.width = newWidth;
         }
         if (heightIsRelative) {
-            int newHeight = static_cast<int>(mode.relativeHeight * static_cast<float>(screenH));
+            int newHeight = static_cast<int>(std::lround(mode.relativeHeight * static_cast<float>(screenH)));
             if (newHeight < 1) newHeight = 1;
             mode.height = newHeight;
         }

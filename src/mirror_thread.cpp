@@ -1857,8 +1857,8 @@ void StartMirrorCaptureThread(void* gameGLContext) {
         Log("Mirror Capture Thread: Context created and shared on main thread (fallback mode)");
     }
 
-    int screenW = GetCachedScreenWidth();
-    int screenH = GetCachedScreenHeight();
+    int screenW = GetCachedWindowWidth();
+    int screenH = GetCachedWindowHeight();
     if (g_copyTextures[0] == 0) {
         InitCaptureTexture(screenW, screenH);
     }

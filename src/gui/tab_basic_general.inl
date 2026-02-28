@@ -276,8 +276,8 @@ if (ImGui::BeginTabItem("General")) {
             ImGui::TableHeader(headers[i]);
         }
 
-        int monitorWidth = GetCachedScreenWidth();
-        int monitorHeight = GetCachedScreenHeight();
+        int monitorWidth = GetCachedWindowWidth();
+        int monitorHeight = GetCachedWindowHeight();
 
         RenderModeTableRow("Fullscreen", "Fullscreen", "fullscreen_hotkey", monitorWidth, monitorHeight, monitorWidth, monitorHeight,
                            EyeZoomInlineKind::None, true);

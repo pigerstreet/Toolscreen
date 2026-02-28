@@ -147,6 +147,8 @@ void RequestScreenMetricsRecalculation() {
 static std::vector<std::string> s_lastActiveMirrorIds;
 static std::string s_lastMirrorConfigModeId;
 static uint64_t s_lastMirrorConfigSnapshotVersion = 0;
+static int s_lastViewportScreenW = 0;
+static int s_lastViewportScreenH = 0;
 
 void UpdateActiveMirrorConfigs() {
     PROFILE_SCOPE_CAT("LT Mirror Configs", "Logic Thread");
@@ -198,8 +200,8 @@ void UpdateActiveMirrorConfigs() {
                                         int groupX = group.output.x;
                                         int groupY = group.output.y;
                                         if (group.output.useRelativePosition) {
-                                            int screenW = GetCachedScreenWidth();
-                                            int screenH = GetCachedScreenHeight();
+                                            int screenW = GetCachedWindowWidth();
+                                            int screenH = GetCachedWindowHeight();
                                             groupX = static_cast<int>(group.output.relativeX * screenW);
                                             groupY = static_cast<int>(group.output.relativeY * screenH);
                                         }
@@ -306,8 +308,7 @@ void UpdateCachedScreenMetrics() {
             }
         }
 
-        const bool windowSizeChanged = changed || (prevWidth != newWidth) || (prevHeight != newHeight);
-        const bool shouldEnforceForExternalResize = IsFullscreen() && windowSizeChanged && clientSizeDiffersFromMode;
+        const bool shouldEnforceForExternalResize = clientSizeDiffersFromMode;
         const bool shouldEnforceModeSize = startupShouldRunNow || modeSizeChanged || shouldEnforceForExternalResize;
 
         if (afterModeW > 0 && afterModeH > 0 && shouldEnforceModeSize && IsResolutionChangeSupported(g_gameVersion)) {
@@ -322,7 +323,7 @@ void UpdateCachedScreenMetrics() {
     }
 }
 
-int GetCachedScreenWidth() {
+int GetCachedWindowWidth() {
     RefreshCachedScreenMetricsIfNeeded(/*requestRecalcOnChange=*/true);
 
     int w = s_cachedScreenWidth.load(std::memory_order_relaxed);
@@ -339,7 +340,7 @@ int GetCachedScreenWidth() {
     return w;
 }
 
-int GetCachedScreenHeight() {
+int GetCachedWindowHeight() {
     RefreshCachedScreenMetricsIfNeeded(/*requestRecalcOnChange=*/true);
 
     int h = s_cachedScreenHeight.load(std::memory_order_relaxed);
@@ -356,6 +357,22 @@ int GetCachedScreenHeight() {
     return h;
 }
 
+void UpdateCachedWindowMetricsFromSize(int clientWidth, int clientHeight) {
+    if (clientWidth <= 0 || clientHeight <= 0) { return; }
+
+    const int prevW = s_cachedScreenWidth.load(std::memory_order_relaxed);
+    const int prevH = s_cachedScreenHeight.load(std::memory_order_relaxed);
+
+    if (prevW != clientWidth || prevH != clientHeight) {
+        s_cachedScreenWidth.store(clientWidth, std::memory_order_relaxed);
+        s_cachedScreenHeight.store(clientHeight, std::memory_order_relaxed);
+        s_screenMetricsRecalcRequested.store(true, std::memory_order_relaxed);
+    }
+
+    s_lastScreenMetricsRefreshMs.store(GetTickCount64(), std::memory_order_relaxed);
+    s_screenMetricsDirty.store(false, std::memory_order_relaxed);
+}
+
 void UpdateCachedViewportMode() {
     PROFILE_SCOPE_CAT("LT Viewport Cache", "Logic Thread");
 
@@ -367,8 +384,12 @@ void UpdateCachedViewportMode() {
     static int s_ticksSinceRefresh = 0;
     bool guiOpen = g_showGui.load(std::memory_order_relaxed);
     bool periodicRefresh = (++s_ticksSinceRefresh >= 60);
+    const int screenW = s_cachedScreenWidth.load(std::memory_order_relaxed);
+    const int screenH = s_cachedScreenHeight.load(std::memory_order_relaxed);
+    const bool screenMetricsChanged = (screenW != s_lastViewportScreenW) || (screenH != s_lastViewportScreenH);
 
-    if (currentModeId == s_lastCachedModeId && snapVer == s_lastCachedViewportSnapshotVersion && !guiOpen && !periodicRefresh) {
+    if (currentModeId == s_lastCachedModeId && snapVer == s_lastCachedViewportSnapshotVersion && !guiOpen && !periodicRefresh &&
+        !screenMetricsChanged) {
         return;
     }
 
@@ -399,6 +420,8 @@ void UpdateCachedViewportMode() {
     g_viewportModeCacheIndex.store(nextIndex, std::memory_order_release);
     s_lastCachedModeId = currentModeId;
     s_lastCachedViewportSnapshotVersion = snapVer;
+    s_lastViewportScreenW = screenW;
+    s_lastViewportScreenH = screenH;
 }
 
 void PollObsGraphicsHook() {

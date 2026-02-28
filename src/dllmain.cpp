@@ -620,6 +620,46 @@ HCURSOR WINAPI hkSetCursor_ThirdParty(HCURSOR hCursor) {
 static int lastViewportW = 0;
 static int lastViewportH = 0;
 
+static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStretchEnabled, int& outStretchX, int& outStretchY,
+                                     int& outStretchW, int& outStretchH) {
+    auto cfgSnap = GetConfigSnapshot();
+    if (!cfgSnap) { return false; }
+
+    const int modeIdx = g_currentModeIdIndex.load(std::memory_order_acquire);
+    const std::string currentModeId = g_modeIdBuffers[modeIdx];
+    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    if (!mode) { return false; }
+
+    const int screenW = (std::max)(1, GetCachedWindowWidth());
+    const int screenH = (std::max)(1, GetCachedWindowHeight());
+
+    // Single source of truth: logic-thread-recalculated mode dimensions.
+    // Do not re-run relative/expression math in the hook; that can introduce
+    // independent rounding/timing drift versus WM_SIZE enforcement.
+    int modeW = mode->width;
+    int modeH = mode->height;
+
+    if (modeW < 1 || modeH < 1) { return false; }
+
+    outModeW = modeW;
+    outModeH = modeH;
+
+    outStretchEnabled = mode->stretch.enabled;
+    if (mode->stretch.enabled) {
+        outStretchX = mode->stretch.x;
+        outStretchY = mode->stretch.y;
+        outStretchW = mode->stretch.width;
+        outStretchH = mode->stretch.height;
+    } else {
+        outStretchX = screenW / 2 - modeW / 2;
+        outStretchY = screenH / 2 - modeH / 2;
+        outStretchW = modeW;
+        outStretchH = modeH;
+    }
+
+    return true;
+}
+
 static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsizei width, GLsizei height) {
     if (!next) return;
 
@@ -648,6 +688,9 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
         stretchY = transitionSnap.toY;
         stretchWidth = transitionSnap.toWidth;
         stretchHeight = transitionSnap.toHeight;
+    } else if (GetLatestViewportForHook(modeWidth, modeHeight, stretchEnabled, stretchX, stretchY, stretchWidth, stretchHeight)) {
+        // Use live, recalculated dimensions so WM_SIZE-driven relative/expression updates
+        // are reflected immediately even before the periodic viewport cache refresh.
     } else if (cachedMode.valid) {
         modeWidth = cachedMode.width;
         modeHeight = cachedMode.height;
@@ -670,10 +713,10 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     }
 
     if (!posValid || !widthMatches || !heightMatches) {
-        /*Log("Returning because viewport parameters don't match mode (x=" + std::to_string(x) + ", y=" + std::to_string(y) +
+        Log("Returning because viewport parameters don't match mode (x=" + std::to_string(x) + ", y=" + std::to_string(y) +
             ", width=" + std::to_string(width) + ", height=" + std::to_string(height) +
             "), lastViewportW=" + std::to_string(lastViewportW) + ", lastViewportH=" + std::to_string(lastViewportH) +
-            ", modeWidth=" + std::to_string(modeWidth) + ", modeHeight=" + std::to_string(modeHeight) + ")");*/
+            ", modeWidth=" + std::to_string(modeWidth) + ", modeHeight=" + std::to_string(modeHeight) + ")");
         return next(x, y, width, height);
     }
 
@@ -690,8 +733,8 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     lastViewportW = modeWidth;
     lastViewportH = modeHeight;
 
-    const int screenW = GetCachedScreenWidth();
-    const int screenH = GetCachedScreenHeight();
+    const int screenW = GetCachedWindowWidth();
+    const int screenH = GetCachedWindowHeight();
 
     // Check if mode transition animation is active (from snapshot - no lock needed)
     bool useAnimatedDimensions = transitionSnap.active;
@@ -730,7 +773,11 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
 
     // Convert Y coordinate from Windows screen space (top-left origin) to OpenGL viewport space (bottom-left origin)
     int stretchY_gl = screenH - stretchY - stretchHeight;
-
+    /*Log("Applying viewport hook with parameters: x=" + std::to_string(stretchX) + ", y=" + std::to_string(stretchY_gl) +
+        ", width=" + std::to_string(stretchWidth) + ", height=" + std::to_string(stretchHeight) +
+        ", modeWidth=" + std::to_string(modeWidth) + ", modeHeight=" + std::to_string(modeHeight) +
+        ", screenW=" + std::to_string(screenW) + ", screenH=" + std::to_string(screenH) +
+        (useAnimatedDimensions ? ", animated" : ""));*/
 
     return next(stretchX, stretchY_gl, stretchWidth, stretchHeight);
 }
@@ -1002,7 +1049,7 @@ void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuf
     ModeViewportInfo viewport = GetCurrentModeViewport();
 
     if (viewport.valid) {
-        int screenH = GetCachedScreenHeight();
+        int screenH = GetCachedWindowHeight();
         int destY0_screen = screenH - viewport.stretchY - viewport.stretchHeight;
         int destY1_screen = screenH - viewport.stretchY;
 
@@ -1083,11 +1130,11 @@ GLuint CalculateGameTextureId() {
 
     const GLuint maxCheckRange = 1000;
 
+    GLint oldTexture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
+
     for (GLuint texId = 0; texId < maxCheckRange; texId++) {
         if (!glIsTexture(texId)) { continue; }
-
-        GLint oldTexture = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
 
         glBindTexture(GL_TEXTURE_2D, texId);
 
@@ -1103,8 +1150,6 @@ GLuint CalculateGameTextureId() {
             glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &magFilter);
             glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrapS);
             glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &wrapT);
-
-            glBindTexture(GL_TEXTURE_2D, oldTexture);
 
             if (g_gameVersion <= GameVersion(1, 16, 5)) {
                 if (minFilter != GL_NEAREST || magFilter != GL_NEAREST || wrapS != GL_CLAMP || wrapT != GL_CLAMP) {
@@ -1125,6 +1170,7 @@ GLuint CalculateGameTextureId() {
 
             Log("CalculateGameTextureId: Found matching texture ID " + std::to_string(texId) + " with dimensions " + std::to_string(width) +
                 "x" + std::to_string(height));
+            glBindTexture(GL_TEXTURE_2D, oldTexture);
             return texId;
         }
 
@@ -1330,8 +1376,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         }
 
                         // Sync screen/game geometry for capture thread to compute render cache.
-                        const int fullW_capture = GetCachedScreenWidth();
-                        const int fullH_capture = GetCachedScreenHeight();
+                        const int fullW_capture = GetCachedWindowWidth();
+                        const int fullH_capture = GetCachedWindowHeight();
                         g_captureScreenW.store(fullW_capture, std::memory_order_release);
                         g_captureScreenH.store(fullH_capture, std::memory_order_release);
                         g_captureGameW.store(viewport.width, std::memory_order_release);
@@ -1371,7 +1417,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             }
         }
 
-        const int fullW = GetCachedScreenWidth(), fullH = GetCachedScreenHeight();
+        const int fullW = GetCachedWindowWidth(), fullH = GetCachedWindowHeight();
         bool isFull = IsFullscreen();
 
         int windowWidth = 0, windowHeight = 0;

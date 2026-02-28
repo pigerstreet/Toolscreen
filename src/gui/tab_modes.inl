@@ -43,8 +43,8 @@ if (ImGui::BeginTabItem("Modes")) {
 
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
-                int modeScreenW = GetCachedScreenWidth();
-                int modeScreenH = GetCachedScreenHeight();
+                int modeScreenW = GetCachedWindowWidth();
+                int modeScreenH = GetCachedWindowHeight();
                 if (modeScreenW < 1) modeScreenW = 1;
                 if (modeScreenH < 1) modeScreenH = 1;
 
@@ -148,8 +148,8 @@ if (ImGui::BeginTabItem("Modes")) {
                 mode.stretch.enabled = true;
                 mode.stretch.x = 0;
                 mode.stretch.y = 0;
-                mode.stretch.width = GetCachedScreenWidth();
-                mode.stretch.height = GetCachedScreenHeight();
+                mode.stretch.width = GetCachedWindowWidth();
+                mode.stretch.height = GetCachedWindowHeight();
 
                 ImGui::Separator();
                 if (ImGui::TreeNode("Transition Settings")) {
@@ -458,7 +458,7 @@ if (ImGui::BeginTabItem("Modes")) {
                 ImGui::NextColumn();
                 ImGui::Text("Vertical Margin");
                 ImGui::NextColumn();
-                int monitorHeight = GetCachedScreenHeight();
+                int monitorHeight = GetCachedWindowHeight();
                 int maxVMargin = (int)((monitorHeight - 0.2f * monitorHeight) / 2.0f);
                 if (maxVMargin < 0) maxVMargin = 0;
                 if (Spinner("##EyeZoomVerticalMargin", &g_config.eyezoom.verticalMargin, 10, 0, maxVMargin)) g_configIsDirty = true;
@@ -2284,8 +2284,8 @@ if (ImGui::BeginTabItem("Modes")) {
 
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
-                int modeScreenW = GetCachedScreenWidth();
-                int modeScreenH = GetCachedScreenHeight();
+                int modeScreenW = GetCachedWindowWidth();
+                int modeScreenH = GetCachedWindowHeight();
                 if (modeScreenW < 1) modeScreenW = 1;
                 if (modeScreenH < 1) modeScreenH = 1;
 
@@ -2706,7 +2706,7 @@ if (ImGui::BeginTabItem("Modes")) {
                     if (Spinner("##StretchX", &mode.stretch.x)) g_configIsDirty = true;
                     ImGui::SameLine();
                     if (ImGui::Button("Center H")) {
-                        mode.stretch.x = (GetCachedScreenWidth() - mode.stretch.width) / 2;
+                        mode.stretch.x = (GetCachedWindowWidth() - mode.stretch.width) / 2;
                         g_configIsDirty = true;
                     }
                     ImGui::NextColumn();
@@ -2719,7 +2719,7 @@ if (ImGui::BeginTabItem("Modes")) {
                     if (Spinner("##StretchY", &mode.stretch.y)) g_configIsDirty = true;
                     ImGui::SameLine();
                     if (ImGui::Button("Center V")) {
-                        mode.stretch.y = (GetCachedScreenHeight() - mode.stretch.height) / 2;
+                        mode.stretch.y = (GetCachedWindowHeight() - mode.stretch.height) / 2;
                         g_configIsDirty = true;
                     }
                     ImGui::NextColumn();
@@ -2736,8 +2736,8 @@ if (ImGui::BeginTabItem("Modes")) {
                     ImGui::TextDisabled("Functions: min(), max(), floor(), ceil(), round(), abs()");
                     ImGui::Separator();
 
-                    int screenW = GetCachedScreenWidth();
-                    int screenH = GetCachedScreenHeight();
+                    int screenW = GetCachedWindowWidth();
+                    int screenH = GetCachedWindowHeight();
 
                     ImGui::Text("Mode Width:");
                     ImGui::SetNextItemWidth(250);
@@ -2952,10 +2952,10 @@ if (ImGui::BeginTabItem("Modes")) {
         newMode.useRelativeSize = true;
         newMode.relativeWidth = 1.0f;
         newMode.relativeHeight = 1.0f;
-        newMode.width = GetCachedScreenWidth();
-        newMode.height = GetCachedScreenHeight();
+        newMode.width = GetCachedWindowWidth();
+        newMode.height = GetCachedWindowHeight();
         newMode.stretch.width = 300;
-        newMode.stretch.height = GetCachedScreenHeight();
+        newMode.stretch.height = GetCachedWindowHeight();
         g_config.modes.push_back(newMode);
         g_configIsDirty = true;
     }
@@ -2975,8 +2975,8 @@ if (ImGui::BeginTabItem("Modes")) {
             g_config.eyezoom = GetDefaultEyeZoomConfig();
 
             // (Example: Wide mode uses height = 0.25, which must be converted to pixels.)
-            int screenW = GetCachedScreenWidth();
-            int screenH = GetCachedScreenHeight();
+            int screenW = GetCachedWindowWidth();
+            int screenH = GetCachedWindowHeight();
             if (screenW < 1) screenW = 1;
             if (screenH < 1) screenH = 1;
 

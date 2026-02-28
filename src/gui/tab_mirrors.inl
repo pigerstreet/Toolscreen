@@ -477,8 +477,8 @@ if (ImGui::BeginTabItem("Mirrors")) {
             if (ImGui::Checkbox("Relative to screen##MirrorPos", &mirror.output.useRelativePosition)) {
                 g_configIsDirty = true;
                 if (mirror.output.useRelativePosition) {
-                    int screenWidth = GetCachedScreenWidth();
-                    int screenHeight = GetCachedScreenHeight();
+                    int screenWidth = GetCachedWindowWidth();
+                    int screenHeight = GetCachedWindowHeight();
                     mirror.output.relativeX = static_cast<float>(mirror.output.x) / screenWidth;
                     mirror.output.relativeY = static_cast<float>(mirror.output.y) / screenHeight;
                 }
@@ -508,8 +508,8 @@ if (ImGui::BeginTabItem("Mirrors")) {
             ImGui::Columns(1);
 
             if (mirror.output.useRelativePosition) {
-                int screenWidth = GetCachedScreenWidth();
-                int screenHeight = GetCachedScreenHeight();
+                int screenWidth = GetCachedWindowWidth();
+                int screenHeight = GetCachedWindowHeight();
 
                 ImGui::Text("X %%");
                 ImGui::SameLine();
@@ -828,8 +828,8 @@ if (ImGui::BeginTabItem("Mirrors")) {
             if (ImGui::Checkbox("Relative to screen##GroupPos", &group.output.useRelativePosition)) {
                 g_configIsDirty = true;
                 if (group.output.useRelativePosition) {
-                    int screenWidth = GetCachedScreenWidth();
-                    int screenHeight = GetCachedScreenHeight();
+                    int screenWidth = GetCachedWindowWidth();
+                    int screenHeight = GetCachedWindowHeight();
                     group.output.relativeX = static_cast<float>(group.output.x) / screenWidth;
                     group.output.relativeY = static_cast<float>(group.output.y) / screenHeight;
                 }
@@ -857,8 +857,8 @@ if (ImGui::BeginTabItem("Mirrors")) {
             ImGui::Columns(1);
 
             if (group.output.useRelativePosition) {
-                int screenWidth = GetCachedScreenWidth();
-                int screenHeight = GetCachedScreenHeight();
+                int screenWidth = GetCachedWindowWidth();
+                int screenHeight = GetCachedWindowHeight();
 
                 ImGui::Text("X %%");
                 ImGui::SameLine();

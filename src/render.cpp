@@ -1433,8 +1433,8 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
         if (ezSnap) { zoomConfig = ezSnap->eyezoom; }
     }
 
-    const int fullW = GetCachedScreenWidth();
-    const int fullH = GetCachedScreenHeight();
+    const int fullW = GetCachedWindowWidth();
+    const int fullH = GetCachedWindowHeight();
 
     bool useSnapshot = g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
 
@@ -1865,8 +1865,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     int fullW, fullH;
     {
         PROFILE_SCOPE_CAT("GetSystemMetrics", "Rendering");
-        fullW = GetCachedScreenWidth();
-        fullH = GetCachedScreenHeight();
+        fullW = GetCachedWindowWidth();
+        fullH = GetCachedWindowHeight();
     }
 
     // Single config snapshot for the entire frame - avoids repeated mutex acquisition
@@ -2320,8 +2320,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                             int groupX = group.output.x;
                             int groupY = group.output.y;
                             if (group.output.useRelativePosition) {
-                                int screenW = GetCachedScreenWidth();
-                                int screenH = GetCachedScreenHeight();
+                                int screenW = GetCachedWindowWidth();
+                                int screenH = GetCachedWindowHeight();
                                 groupX = static_cast<int>(group.output.relativeX * screenW);
                                 groupY = static_cast<int>(group.output.relativeY * screenH);
                             }
@@ -2928,8 +2928,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO) {
     if (!conf || !g_glInitialized.load(std::memory_order_acquire)) return;
 
-    const int fullW = GetCachedScreenWidth();
-    const int fullH = GetCachedScreenHeight();
+    const int fullW = GetCachedWindowWidth();
+    const int fullH = GetCachedWindowHeight();
 
     GameViewportGeometry geo;
     {
@@ -3051,8 +3051,8 @@ void RenderTextureGridOverlay(bool showTextureGrid, int modeWidth, int modeHeigh
     const int PADDING = 80;
     const int MARGIN = 80;
 
-    int screenW = GetCachedScreenWidth();
-    int screenH = GetCachedScreenHeight();
+    int screenW = GetCachedWindowWidth();
+    int screenH = GetCachedWindowHeight();
 
     struct TexInfo { GLuint id; GLint width; GLint height; GLint internalFormat; };
     std::vector<TexInfo> validTextures;
@@ -3687,8 +3687,8 @@ void GetAnimatedModeViewport(int& outWidth, int& outHeight) {
             outWidth = viewport.stretchEnabled ? viewport.stretchWidth : viewport.width;
             outHeight = viewport.stretchEnabled ? viewport.stretchHeight : viewport.height;
         } else {
-            outWidth = GetCachedScreenWidth();
-            outHeight = GetCachedScreenHeight();
+            outWidth = GetCachedWindowWidth();
+            outHeight = GetCachedWindowHeight();
         }
     }
 }
@@ -3704,8 +3704,8 @@ void GetAnimatedModePosition(int& outX, int& outY) {
             outX = viewport.stretchX;
             outY = viewport.stretchY;
         } else {
-            int screenW = GetCachedScreenWidth();
-            int screenH = GetCachedScreenHeight();
+            int screenW = GetCachedWindowWidth();
+            int screenH = GetCachedWindowHeight();
             outX = screenW / 2;
             outY = screenH / 2;
         }
