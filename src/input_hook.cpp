@@ -1657,6 +1657,36 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                        vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
             };
 
+            auto isNonCharSourceVk = [&](DWORD vk) {
+                if (isModifierVk(vk)) return true;
+                if (vk == VK_LWIN || vk == VK_RWIN) return true;
+                if (vk >= VK_F1 && vk <= VK_F24) return true;
+
+                switch (vk) {
+                case VK_INSERT:
+                case VK_DELETE:
+                case VK_HOME:
+                case VK_END:
+                case VK_PRIOR:
+                case VK_NEXT:
+                case VK_LEFT:
+                case VK_RIGHT:
+                case VK_UP:
+                case VK_DOWN:
+                case VK_CLEAR:
+                case VK_ESCAPE:
+                case VK_PAUSE:
+                case VK_SNAPSHOT:
+                case VK_CAPITAL:
+                case VK_NUMLOCK:
+                case VK_SCROLL:
+                case VK_APPS:
+                    return true;
+                default:
+                    return false;
+                }
+            };
+
             const DWORD triggerVK =
                 NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
 
@@ -1724,8 +1754,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
                 const bool fromKeyIsNonCharMouse =
                     isMouseButton ||
-                    isModifierVk(rebind.fromKey) || rebind.fromKey == VK_LWIN || rebind.fromKey == VK_RWIN ||
-                    (rebind.fromKey >= VK_F1 && rebind.fromKey <= VK_F24);
+                    isNonCharSourceVk(rebind.fromKey);
 
                 if (isKeyDown && fromKeyIsNonCharMouse) {
                     const uint32_t configuredUnicodeText =
@@ -1787,8 +1816,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
             const bool fromKeyIsNonChar =
                 isMouseButton ||
-                isModifierVk(rebind.fromKey) || rebind.fromKey == VK_LWIN || rebind.fromKey == VK_RWIN ||
-                (rebind.fromKey >= VK_F1 && rebind.fromKey <= VK_F24);
+                isNonCharSourceVk(rebind.fromKey);
 
             UINT repeatCount = 1;
             bool previousState = !isKeyDown;
