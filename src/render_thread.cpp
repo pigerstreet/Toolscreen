@@ -1834,59 +1834,64 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         glUseProgram(rt_imageRenderProgram);
         glUniform1i(rt_imageRenderShaderLocs.enableColorKey, 0);
 
-        std::lock_guard<std::mutex> lock(g_userImagesMutex);
-        std::string imageId = "ezoverlay_" + ov.name;
-        auto it = g_userImages.find(imageId);
-        if (it != g_userImages.end() && it->second.textureId != 0) {
-            const UserImageInstance& inst = it->second;
-            int texW = inst.width;
-            int texH = inst.height;
-            if (texW > 0 && texH > 0) {
-                float displayW, displayH;
-                switch (ov.displayMode) {
-                    case EyeZoomOverlayDisplayMode::Manual:
-                        displayW = (float)ov.manualWidth;
-                        displayH = (float)ov.manualHeight;
-                        break;
-                    case EyeZoomOverlayDisplayMode::Stretch:
-                        displayW = (float)zoomOutputWidth;
-                        displayH = (float)zoomOutputHeight;
-                        break;
-                    case EyeZoomOverlayDisplayMode::Fit:
-                    default: {
-                        float scaleF = (std::min)((float)zoomOutputWidth / texW, (float)zoomOutputHeight / texH);
-                        displayW = texW * scaleF;
-                        displayH = texH * scaleF;
-                        break;
-                    }
-                }
-
-                float ovLeft = zoomX + (zoomOutputWidth - displayW) / 2.0f;
-                float ovBottom_gl = zoomY_gl + (zoomOutputHeight - displayH) / 2.0f;
-                float ovRight = ovLeft + displayW;
-                float ovTop_gl = ovBottom_gl + displayH;
-
-                float nx1 = (ovLeft / (float)fullW) * 2.0f - 1.0f;
-                float nx2 = (ovRight / (float)fullW) * 2.0f - 1.0f;
-                float ny1 = (ovBottom_gl / (float)fullH) * 2.0f - 1.0f;
-                float ny2 = (ovTop_gl / (float)fullH) * 2.0f - 1.0f;
-
-                glBindTexture(GL_TEXTURE_2D, inst.textureId);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glUniform1f(rt_imageRenderShaderLocs.opacity, ov.opacity);
-
-                float ovVerts[] = {
-                    nx1, ny1, 0.0f, 0.0f,
-                    nx2, ny1, 1.0f, 0.0f,
-                    nx2, ny2, 1.0f, 1.0f,
-                    nx1, ny1, 0.0f, 0.0f,
-                    nx2, ny2, 1.0f, 1.0f,
-                    nx1, ny2, 0.0f, 1.0f,
-                };
-                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(ovVerts), ovVerts);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
+        GLuint overlayTexId = 0;
+        int texW = 0;
+        int texH = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_userImagesMutex);
+            auto it = g_userImages.find("ezoverlay_" + ov.name);
+            if (it != g_userImages.end() && it->second.textureId != 0) {
+                overlayTexId = it->second.textureId;
+                texW = it->second.width;
+                texH = it->second.height;
             }
+        }
+
+        if (overlayTexId != 0 && texW > 0 && texH > 0) {
+            float displayW, displayH;
+            switch (ov.displayMode) {
+                case EyeZoomOverlayDisplayMode::Manual:
+                    displayW = (float)ov.manualWidth;
+                    displayH = (float)ov.manualHeight;
+                    break;
+                case EyeZoomOverlayDisplayMode::Stretch:
+                    displayW = (float)zoomOutputWidth;
+                    displayH = (float)zoomOutputHeight;
+                    break;
+                case EyeZoomOverlayDisplayMode::Fit:
+                default: {
+                    float scaleF = (std::min)((float)zoomOutputWidth / texW, (float)zoomOutputHeight / texH);
+                    displayW = texW * scaleF;
+                    displayH = texH * scaleF;
+                    break;
+                }
+            }
+
+            float ovLeft = zoomX + (zoomOutputWidth - displayW) / 2.0f;
+            float ovBottom_gl = zoomY_gl + (zoomOutputHeight - displayH) / 2.0f;
+            float ovRight = ovLeft + displayW;
+            float ovTop_gl = ovBottom_gl + displayH;
+
+            float nx1 = (ovLeft / (float)fullW) * 2.0f - 1.0f;
+            float nx2 = (ovRight / (float)fullW) * 2.0f - 1.0f;
+            float ny1 = (ovBottom_gl / (float)fullH) * 2.0f - 1.0f;
+            float ny2 = (ovTop_gl / (float)fullH) * 2.0f - 1.0f;
+
+            glBindTexture(GL_TEXTURE_2D, overlayTexId);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glUniform1f(rt_imageRenderShaderLocs.opacity, ov.opacity);
+
+            float ovVerts[] = {
+                nx1, ny1, 0.0f, 0.0f,
+                nx2, ny1, 1.0f, 0.0f,
+                nx2, ny2, 1.0f, 1.0f,
+                nx1, ny1, 0.0f, 0.0f,
+                nx2, ny2, 1.0f, 1.0f,
+                nx1, ny2, 0.0f, 1.0f,
+            };
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(ovVerts), ovVerts);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
         }
     }
 

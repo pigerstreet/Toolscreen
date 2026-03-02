@@ -2364,6 +2364,13 @@ bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex)
     return false;
 }
 
+bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex) {
+    for (size_t i = 0; i < g_config.eyezoom.overlays.size(); i++) {
+        if (i != currentIndex && g_config.eyezoom.overlays[i].name == name) { return true; }
+    }
+    return false;
+}
+
 bool Spinner(const char* id_label, int* v, int step, int min_val, int max_val, float inputWidth, float margin) {
     ImGui::PushID(id_label);
     bool value_changed = false;

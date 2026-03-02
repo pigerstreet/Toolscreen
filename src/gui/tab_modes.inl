@@ -499,8 +499,25 @@ if (ImGui::BeginTabItem("Modes")) {
                     bool nodeOpen = ImGui::TreeNodeEx("##ezoverlay_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", ov.name.c_str());
 
                     if (nodeOpen) {
+                        bool hasDuplicate = HasDuplicateEyeZoomOverlayName(ov.name, ovi);
+                        if (hasDuplicate) {
+                            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.7f, 0.3f, 0.3f, 1.0f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
+                        }
+
                         if (ImGui::InputText("Name##ezov", &ov.name)) {
-                            g_configIsDirty = true;
+                            if (!HasDuplicateEyeZoomOverlayName(ov.name, ovi)) {
+                                g_configIsDirty = true;
+                            } else {
+                                ov.name = oldName;
+                            }
+                        }
+
+                        if (hasDuplicate) { ImGui::PopStyleColor(3); }
+                        if (hasDuplicate) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Name already exists!");
                         }
 
                         if (ImGui::InputText("Path##ezov", &ov.path)) {

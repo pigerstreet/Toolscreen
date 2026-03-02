@@ -1370,6 +1370,10 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
             }
         }
     }
+
+    if (cfg.activeOverlayIndex < -1 || cfg.activeOverlayIndex >= (int)cfg.overlays.size()) {
+        cfg.activeOverlayIndex = -1;
+    }
 }
 
 void KeyRebindToToml(const KeyRebind& cfg, toml::table& out) {

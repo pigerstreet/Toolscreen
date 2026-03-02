@@ -119,6 +119,7 @@ bool HasDuplicateModeName(const std::string& name, size_t currentIndex);
 bool HasDuplicateMirrorName(const std::string& name, size_t currentIndex);
 bool HasDuplicateImageName(const std::string& name, size_t currentIndex);
 bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex);
+bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex);
 
 
 void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, const std::string& idSuffix);
