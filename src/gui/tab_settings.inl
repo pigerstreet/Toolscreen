@@ -72,7 +72,7 @@ if (ImGui::BeginTabItem("Settings")) {
         if (vcEnabled) {
             int screenW = GetSystemMetrics(SM_CXSCREEN);
             int screenH = GetSystemMetrics(SM_CYSCREEN);
-            StartVirtualCamera(screenW, screenH, g_config.debug.virtualCameraFps);
+            StartVirtualCamera(screenW, screenH);
         } else {
             StopVirtualCamera();
         }
@@ -89,12 +89,6 @@ if (ImGui::BeginTabItem("Settings")) {
                    "Requires OBS Virtual Camera driver to be installed.\n"
                    "Works independently of OBS being open.");
     }
-
-    ImGui::BeginDisabled(!driverInstalled || inUseByOBS || !vcEnabled);
-    ImGui::Indent();
-    if (ImGui::SliderInt("Camera FPS", &g_config.debug.virtualCameraFps, 15, 120, "%d fps")) { g_configIsDirty = true; }
-    ImGui::Unindent();
-    ImGui::EndDisabled();
 
     ImGui::Spacing();
 

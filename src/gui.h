@@ -345,7 +345,6 @@ struct DebugGlobalConfig {
     bool delayRenderingUntilFinished = false;
     bool delayRenderingUntilBlitted = false;  // Wait on async overlay blit fence before SwapBuffers
     bool virtualCameraEnabled = false;        // Output to OBS Virtual Camera driver
-    int virtualCameraFps = 60;
 
     bool logModeSwitch = false;
     bool logAnimation = false;

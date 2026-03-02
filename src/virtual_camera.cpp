@@ -17,6 +17,9 @@ std::atomic<bool> g_virtualCameraActive{ false };
 
 static std::mutex g_vcMutex;
 static std::string g_vcLastError;
+static std::atomic<LONGLONG> g_vcLastCaptureTick{ 0 };
+
+constexpr int kVirtualCameraFixedFps = 60;
 
 #define VIDEO_NAME L"OBSVirtualCamVideo"
 #define FRAME_HEADER_SIZE 32
@@ -48,8 +51,7 @@ struct VirtualCameraState {
     uint8_t* frame[3] = { nullptr, nullptr, nullptr };
     uint32_t width = 0;
     uint32_t height = 0;
-    uint64_t interval = 333333;
-    int targetFps = 30;
+    uint64_t interval = 10000000ULL / kVirtualCameraFixedFps;
     LARGE_INTEGER lastFrameTime = {};
     LARGE_INTEGER perfFreq = {};
     bool active = false;
@@ -151,9 +153,15 @@ bool IsVirtualCameraInUseByOBS() {
     return inUse;
 }
 
-bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
-    if (fps < 15) fps = 15;
-    if (fps > 60) fps = 60;
+bool StartVirtualCamera(uint32_t width, uint32_t height) {
+    if ((width & 1U) != 0) { width -= 1; }
+    if ((height & 1U) != 0) { height -= 1; }
+    if (width < 2 || height < 2) {
+        g_vcLastError = "Invalid virtual camera dimensions";
+        Log("Virtual Camera: " + g_vcLastError);
+        return false;
+    }
+
     std::lock_guard<std::mutex> lock(g_vcMutex);
 
     if (g_vcState.active) {
@@ -173,10 +181,10 @@ bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
         return false;
     }
 
-    g_vcState.targetFps = fps;
-    g_vcState.interval = 10000000ULL / fps;
+    g_vcState.interval = 10000000ULL / kVirtualCameraFixedFps;
     QueryPerformanceFrequency(&g_vcState.perfFreq);
     g_vcState.lastFrameTime.QuadPart = 0;
+    g_vcLastCaptureTick.store(0, std::memory_order_release);
 
     uint32_t frameSize = width * height * 3 / 2;
     uint32_t offset_frame[3];
@@ -234,11 +242,12 @@ bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
     g_vcState.active = true;
     g_virtualCameraActive.store(true, std::memory_order_release);
 
-    Log("Virtual Camera: Started at " + std::to_string(width) + "x" + std::to_string(height));
+    Log("Virtual Camera: Started at " + std::to_string(width) + "x" + std::to_string(height) + " @ 60fps");
     return true;
 }
 
 void StopVirtualCamera() {
+    g_virtualCameraActive.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lock(g_vcMutex);
 
     if (!g_vcState.active) { return; }
@@ -261,27 +270,47 @@ void StopVirtualCamera() {
     }
 
     g_vcState.active = false;
-    g_virtualCameraActive.store(false, std::memory_order_release);
+    g_vcState.lastFrameTime.QuadPart = 0;
+    g_vcLastCaptureTick.store(0, std::memory_order_release);
 
     Log("Virtual Camera: Stopped");
 }
 
+bool ShouldCaptureVirtualCameraFrame() {
+    if (!g_virtualCameraActive.load(std::memory_order_acquire)) { return false; }
+
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+
+    const LONGLONG minTicks = g_vcState.perfFreq.QuadPart / kVirtualCameraFixedFps;
+    if (minTicks <= 0) { return true; }
+
+    LONGLONG observed = g_vcLastCaptureTick.load(std::memory_order_relaxed);
+    while (true) {
+        if (observed != 0 && (now.QuadPart - observed) < minTicks) { return false; }
+        if (g_vcLastCaptureTick.compare_exchange_weak(observed, now.QuadPart, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            return true;
+        }
+    }
+}
+
 bool WriteVirtualCameraFrame(const uint8_t* rgba_data, uint32_t width, uint32_t height, uint64_t timestamp) {
     if (!g_virtualCameraActive.load(std::memory_order_acquire)) { return false; }
+
+    std::lock_guard<std::mutex> lock(g_vcMutex);
+
+    if (!g_vcState.active || !g_vcState.header) { return false; }
 
     // FPS limiting before any work (lock-free fast path)
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     if (g_vcState.lastFrameTime.QuadPart != 0) {
         LONGLONG elapsed = now.QuadPart - g_vcState.lastFrameTime.QuadPart;
-        LONGLONG minTicks = g_vcState.perfFreq.QuadPart / g_vcState.targetFps;
+        LONGLONG minTicks = g_vcState.perfFreq.QuadPart / kVirtualCameraFixedFps;
         if (elapsed < minTicks) {
             return true;
         }
     }
-
-    // Quick state check without lock
-    if (!g_vcState.active || !g_vcState.header) { return false; }
 
     if (width != g_vcState.width || height != g_vcState.height) { return false; }
 
@@ -317,19 +346,20 @@ bool WriteVirtualCameraFrame(const uint8_t* rgba_data, uint32_t width, uint32_t 
 bool WriteVirtualCameraFrameNV12(const uint8_t* nv12_data, uint32_t width, uint32_t height, uint64_t timestamp) {
     if (!g_virtualCameraActive.load(std::memory_order_acquire)) { return false; }
 
+    std::lock_guard<std::mutex> lock(g_vcMutex);
+
+    if (!g_vcState.active || !g_vcState.header) { return false; }
+
     // FPS limiting (lock-free integer comparison)
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     if (g_vcState.lastFrameTime.QuadPart != 0) {
         LONGLONG elapsed = now.QuadPart - g_vcState.lastFrameTime.QuadPart;
-        LONGLONG minTicks = g_vcState.perfFreq.QuadPart / g_vcState.targetFps;
+        LONGLONG minTicks = g_vcState.perfFreq.QuadPart / kVirtualCameraFixedFps;
         if (elapsed < minTicks) {
             return true;
         }
     }
-
-    // Quick state check without lock
-    if (!g_vcState.active || !g_vcState.header) { return false; }
 
     if (width != g_vcState.width || height != g_vcState.height) { return false; }
 

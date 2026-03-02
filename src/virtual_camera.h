@@ -5,7 +5,7 @@
 
 // This works independently of OBS Studio - the driver just needs to be installed
 
-bool StartVirtualCamera(uint32_t width, uint32_t height, int fps = 30);
+bool StartVirtualCamera(uint32_t width, uint32_t height);
 
 void StopVirtualCamera();
 
@@ -20,6 +20,8 @@ bool IsVirtualCameraActive();
 bool IsVirtualCameraDriverInstalled();
 
 bool IsVirtualCameraInUseByOBS();
+
+bool ShouldCaptureVirtualCameraFrame();
 
 const char* GetVirtualCameraError();
 

@@ -1429,6 +1429,13 @@ static void StartVirtualCameraComputeReadback(GLuint srcTexture, int texW, int t
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
             g_vcReadbackPending = true;
+        } else if (result == GL_WAIT_FAILED) {
+            if (glIsSync(g_vcFence)) { glDeleteSync(g_vcFence); }
+            g_vcFence = nullptr;
+            g_vcComputePending = false;
+        } else {
+            FlushVirtualCameraReadback();
+            return;
         }
     }
 
@@ -1522,6 +1529,7 @@ static void StartVirtualCameraPBOReadback(GLuint obsTexture, int width, int heig
 static void StartVirtualCameraAsyncReadback(GLuint obsTexture, int width, int height) {
     if (obsTexture == 0 || width <= 0 || height <= 0) return;
     if (!IsVirtualCameraActive()) return;
+    if (!ShouldCaptureVirtualCameraFrame()) return;
 
     int outW, outH;
     GetVirtualCamScaledSize(width, height, 1.0f, outW, outH);
@@ -2820,9 +2828,9 @@ static void RenderThreadFunc(void* gameGLContext) {
             int screenH = GetCachedWindowHeight();
             int vcW, vcH;
             GetVirtualCamScaledSize(screenW, screenH, 1.0f, vcW, vcH);
-            if (StartVirtualCamera(vcW, vcH, initCfg->debug.virtualCameraFps)) {
+            if (StartVirtualCamera(vcW, vcH)) {
                 LogCategory("init", "Render Thread: Virtual Camera initialized at " + std::to_string(vcW) + "x" + std::to_string(vcH) +
-                                        " @ " + std::to_string(initCfg->debug.virtualCameraFps) + "fps");
+                                        " @ 60fps");
             } else {
                 Log("Render Thread: Virtual Camera initialization failed");
             }
