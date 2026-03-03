@@ -11,7 +11,7 @@
 #include "render.h"
 #include "render_thread.h"
 #include "resource.h"
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 #include "stb_image.h"
 #include "utils.h"
 #include "virtual_camera.h"
