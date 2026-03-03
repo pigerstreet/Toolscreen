@@ -39,7 +39,6 @@
 #pragma comment(lib, "Comdlg32.lib")
 #pragma comment(lib, "Msimg32.lib")
 #pragma comment(lib, "opengl32.lib")
-#pragma comment(lib, "libglew32.lib")
 #pragma comment(lib, "DbgHelp.lib")
 
 #define STB_IMAGE_IMPLEMENTATION
