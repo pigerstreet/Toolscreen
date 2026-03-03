@@ -7,6 +7,12 @@
 !src/gui/**
 !src/*.toml
 !src/*.png
+!src/*.rc
+!CMakeLists.txt
 !.github
 !.github/ISSUE_TEMPLATE/
 !.github/ISSUE_TEMPLATE/*.yml
+!.github/workflows/
+!.github/workflows/*.yml
+!LICENSE
+!README.md
