@@ -17,9 +17,9 @@
 #include <fstream>
 
 // ImGui includes for render thread
-#include "include/imgui/backends/imgui_impl_opengl3.h"
-#include "include/imgui/backends/imgui_impl_win32.h"
-#include "include/imgui/imgui.h"
+#include "imgui_impl_opengl3.h"
+#include "imgui_impl_win32.h"
+#include "imgui.h"
 
 #include "logic_thread.h"
 
