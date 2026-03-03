@@ -1,5 +1,5 @@
 #include "version.h"
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 #include "utils.h"
 #include <filesystem>
 #include <fstream>
