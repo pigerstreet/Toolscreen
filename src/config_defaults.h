@@ -62,6 +62,7 @@ constexpr int BORDER_WIDTH = 4;
 constexpr int BORDER_RADIUS = 0;
 
 constexpr float COLOR_KEY_SENSITIVITY = 0.05f;
+constexpr int MAX_COLOR_KEYS = 8;
 
 constexpr int IMAGE_X = 0;
 constexpr int IMAGE_Y = 0;

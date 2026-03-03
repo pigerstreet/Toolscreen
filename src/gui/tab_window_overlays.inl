@@ -316,6 +316,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                 g_configIsDirty = true;
             }
 
+            ImGui::BeginDisabled(overlay.colorKeys.size() >= ConfigDefaults::MAX_COLOR_KEYS);
             if (ImGui::Button("+ Add Color Key")) {
                 ColorKeyConfig newKey;
                 newKey.color = { 0.0f, 0.0f, 0.0f };
@@ -323,6 +324,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                 overlay.colorKeys.push_back(newKey);
                 g_configIsDirty = true;
             }
+            ImGui::EndDisabled();
 
             ImGui::EndDisabled();
 

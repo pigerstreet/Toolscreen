@@ -418,10 +418,13 @@ static const char* rt_image_render_frag_shader = R"(#version 330 core
 out vec4 FragColor;
 in vec2 TexCoord;
 
+#define MAX_COLOR_KEYS 8
+
 uniform sampler2D imageTexture;
 uniform bool u_enableColorKey;
-uniform vec3 u_colorKey;
-uniform float u_sensitivity;
+uniform int u_numColorKeys;
+uniform vec3 u_colorKeys[MAX_COLOR_KEYS];
+uniform float u_sensitivities[MAX_COLOR_KEYS];
 uniform float u_opacity;
 
 void main() {
@@ -429,13 +432,15 @@ void main() {
 
     if (u_enableColorKey) {
         vec3 linearTexColor = pow(texColor.rgb, vec3(2.2));
-        vec3 linearKeyColor = pow(u_colorKey, vec3(2.2));
-        float dist = distance(linearTexColor, linearKeyColor);
-        if (dist < u_sensitivity) {
-            discard;
+        for (int i = 0; i < u_numColorKeys; i++) {
+            vec3 linearKeyColor = pow(u_colorKeys[i], vec3(2.2));
+            float dist = distance(linearTexColor, linearKeyColor);
+            if (dist < u_sensitivities[i]) {
+                discard;
+            }
         }
     }
-    
+
     FragColor = vec4(texColor.rgb, texColor.a * u_opacity);
 })";
 
@@ -703,8 +708,9 @@ struct RT_SolidColorShaderLocs {
 struct RT_ImageRenderShaderLocs {
     GLint imageTexture = -1;
     GLint enableColorKey = -1;
-    GLint colorKey = -1;
-    GLint sensitivity = -1;
+    GLint numColorKeys = -1;
+    GLint colorKeys = -1;
+    GLint sensitivities = -1;
     GLint opacity = -1;
 };
 
@@ -833,8 +839,9 @@ static bool RT_InitializeShaders() {
 
     rt_imageRenderShaderLocs.imageTexture = glGetUniformLocation(rt_imageRenderProgram, "imageTexture");
     rt_imageRenderShaderLocs.enableColorKey = glGetUniformLocation(rt_imageRenderProgram, "u_enableColorKey");
-    rt_imageRenderShaderLocs.colorKey = glGetUniformLocation(rt_imageRenderProgram, "u_colorKey");
-    rt_imageRenderShaderLocs.sensitivity = glGetUniformLocation(rt_imageRenderProgram, "u_sensitivity");
+    rt_imageRenderShaderLocs.numColorKeys = glGetUniformLocation(rt_imageRenderProgram, "u_numColorKeys");
+    rt_imageRenderShaderLocs.colorKeys = glGetUniformLocation(rt_imageRenderProgram, "u_colorKeys");
+    rt_imageRenderShaderLocs.sensitivities = glGetUniformLocation(rt_imageRenderProgram, "u_sensitivities");
     rt_imageRenderShaderLocs.opacity = glGetUniformLocation(rt_imageRenderProgram, "u_opacity");
 
     rt_gradientShaderLocs.numStops = glGetUniformLocation(rt_gradientProgram, "u_numStops");
@@ -2450,8 +2457,18 @@ static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fu
         }
         glUniform1i(rt_imageRenderShaderLocs.enableColorKey, conf.enableColorKey && !conf.colorKeys.empty() ? 1 : 0);
         if (conf.enableColorKey && !conf.colorKeys.empty()) {
-            glUniform3f(rt_imageRenderShaderLocs.colorKey, conf.colorKeys[0].color.r, conf.colorKeys[0].color.g, conf.colorKeys[0].color.b);
-            glUniform1f(rt_imageRenderShaderLocs.sensitivity, conf.colorKeys[0].sensitivity);
+            int numKeys = (std::min)(static_cast<int>(conf.colorKeys.size()), ConfigDefaults::MAX_COLOR_KEYS);
+            float colors[ConfigDefaults::MAX_COLOR_KEYS * 3];
+            float sensitivities[ConfigDefaults::MAX_COLOR_KEYS];
+            for (int i = 0; i < numKeys; i++) {
+                colors[i * 3 + 0] = conf.colorKeys[i].color.r;
+                colors[i * 3 + 1] = conf.colorKeys[i].color.g;
+                colors[i * 3 + 2] = conf.colorKeys[i].color.b;
+                sensitivities[i] = conf.colorKeys[i].sensitivity;
+            }
+            glUniform1i(rt_imageRenderShaderLocs.numColorKeys, numKeys);
+            glUniform3fv(rt_imageRenderShaderLocs.colorKeys, numKeys, colors);
+            glUniform1fv(rt_imageRenderShaderLocs.sensitivities, numKeys, sensitivities);
         }
         glUniform1f(rt_imageRenderShaderLocs.opacity, effectiveOpacity);
 

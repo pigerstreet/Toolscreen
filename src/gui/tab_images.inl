@@ -206,6 +206,7 @@ if (ImGui::BeginTabItem("Images")) {
                 g_configIsDirty = true;
             }
 
+            ImGui::BeginDisabled(img.colorKeys.size() >= ConfigDefaults::MAX_COLOR_KEYS);
             if (ImGui::Button("+ Add Color Key")) {
                 ColorKeyConfig newKey;
                 newKey.color = { 0.0f, 0.0f, 0.0f };
@@ -213,6 +214,7 @@ if (ImGui::BeginTabItem("Images")) {
                 img.colorKeys.push_back(newKey);
                 g_configIsDirty = true;
             }
+            ImGui::EndDisabled();
 
             ImGui::EndDisabled();
 
