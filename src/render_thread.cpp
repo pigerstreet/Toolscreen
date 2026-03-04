@@ -1092,6 +1092,8 @@ static void RT_RenderBackground(bool isImage, GLuint bgTexture, float bgR, float
 }
 
 static void InitRenderFBOs(int width, int height) {
+    if (width <= 0 || height <= 0) { return; }
+
     bool mainResized = false;
     bool obsResized = false;
 
@@ -3066,6 +3068,42 @@ static void RenderThreadFunc(void* gameGLContext) {
             if (!cfgSnapshot) continue;
             const Config& cfg = *cfgSnapshot;
             const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
+
+            if (request.fullW <= 0 || request.fullH <= 0) {
+                static ULONGLONG s_lastInvalidSizeLogMs = 0;
+                ULONGLONG nowMs = GetTickCount64();
+                if (nowMs - s_lastInvalidSizeLogMs >= 250) {
+                    s_lastInvalidSizeLogMs = nowMs;
+                    Log("RenderThread: Skipping frame with invalid target size " + std::to_string(request.fullW) + "x" +
+                        std::to_string(request.fullH));
+                }
+
+                if (request.gameTextureFence && glIsSync(request.gameTextureFence)) { glDeleteSync(request.gameTextureFence); }
+
+                if (isObsRequest) {
+                    {
+                        std::lock_guard<std::mutex> lock(g_obsCompletionMutex);
+                        g_obsFrameComplete.store(true);
+                    }
+                    g_obsCompletionCV.notify_one();
+                } else {
+                    g_renderFrameNumber.store(request.frameNumber);
+                    {
+                        std::lock_guard<std::mutex> lock(g_completionMutex);
+                        g_frameComplete.store(true);
+                    }
+                    g_completionCV.notify_one();
+                }
+
+                if (hasPendingMain) {
+                    request = pendingMainRequest;
+                    isObsRequest = false;
+                    hasPendingMain = false;
+                    goto process_request;
+                }
+
+                continue;
+            }
 
             // === Image Processing (moved from main thread) ===
             {

@@ -781,24 +781,31 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
 
     const bool widthHasRelative = cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f;
     const bool heightHasRelative = cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f;
-    const bool useRelativeWidthForWrite = cfg.widthExpr.empty() && widthHasRelative;
-    const bool useRelativeHeightForWrite = cfg.heightExpr.empty() && heightHasRelative;
+    const bool widthIsDynamic = !cfg.widthExpr.empty() || (cfg.useRelativeSize && widthHasRelative);
+    const bool heightIsDynamic = !cfg.heightExpr.empty() || (cfg.useRelativeSize && heightHasRelative);
 
-    if (!cfg.widthExpr.empty()) {
-        out.insert("width", cfg.widthExpr);
-    } else if (useRelativeWidthForWrite) {
-        out.insert("width", cfg.relativeWidth);
-    } else {
-        out.insert("width", cfg.width);
+    int persistedWidth = cfg.width;
+    int persistedHeight = cfg.height;
+
+    if (widthIsDynamic) {
+        persistedWidth = (cfg.manualWidth > 0) ? cfg.manualWidth : cfg.width;
+    }
+    if (heightIsDynamic) {
+        persistedHeight = (cfg.manualHeight > 0) ? cfg.manualHeight : cfg.height;
     }
 
-    if (!cfg.heightExpr.empty()) {
-        out.insert("height", cfg.heightExpr);
-    } else if (useRelativeHeightForWrite) {
-        out.insert("height", cfg.relativeHeight);
-    } else {
-        out.insert("height", cfg.height);
-    }
+    if (persistedWidth < 1) persistedWidth = ConfigDefaults::MODE_WIDTH;
+    if (persistedHeight < 1) persistedHeight = ConfigDefaults::MODE_HEIGHT;
+
+    out.insert("width", persistedWidth);
+    out.insert("height", persistedHeight);
+
+    out.insert("useRelativeSize", cfg.useRelativeSize);
+    if (widthHasRelative) { out.insert("relativeWidth", cfg.relativeWidth); }
+    if (heightHasRelative) { out.insert("relativeHeight", cfg.relativeHeight); }
+
+    if (!cfg.widthExpr.empty()) { out.insert("widthExpr", cfg.widthExpr); }
+    if (!cfg.heightExpr.empty()) { out.insert("heightExpr", cfg.heightExpr); }
 
     toml::table bgTbl;
     BackgroundConfigToToml(cfg.background, bgTbl);
@@ -924,6 +931,9 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
 
     if (!cfg.widthExpr.empty()) { cfg.relativeWidth = -1.0f; }
     if (!cfg.heightExpr.empty()) { cfg.relativeHeight = -1.0f; }
+
+    cfg.manualWidth = (cfg.width > 0) ? cfg.width : ConfigDefaults::MODE_WIDTH;
+    cfg.manualHeight = (cfg.height > 0) ? cfg.height : ConfigDefaults::MODE_HEIGHT;
 
     // Note: Actual pixel conversion from percentages is done elsewhere (GUI/logic thread)
 
@@ -1840,6 +1850,11 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
         std::vector<std::string> modeKeys = { "id",
                                               "width",
                                               "height",
+                                              "useRelativeSize",
+                                              "relativeWidth",
+                                              "relativeHeight",
+                                              "widthExpr",
+                                              "heightExpr",
                                               "background",
                                               "mirrorIds",
                                               "mirrorGroupIds",

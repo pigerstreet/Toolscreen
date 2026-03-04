@@ -263,6 +263,7 @@ enum class EasingType {
 struct ModeConfig {
     std::string id;
     int width = 0, height = 0;
+    int manualWidth = 0, manualHeight = 0;
     bool useRelativeSize = false;
     float relativeWidth = 0.5f;
     float relativeHeight = 0.5f;

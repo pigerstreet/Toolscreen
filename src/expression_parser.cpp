@@ -418,6 +418,8 @@ void RecalculateExpressionDimensions() {
     if (eyezoomMode && preemptiveMode) {
         preemptiveMode->width = eyezoomMode->width;
         preemptiveMode->height = eyezoomMode->height;
+        preemptiveMode->manualWidth = (eyezoomMode->manualWidth > 0) ? eyezoomMode->manualWidth : eyezoomMode->width;
+        preemptiveMode->manualHeight = (eyezoomMode->manualHeight > 0) ? eyezoomMode->manualHeight : eyezoomMode->height;
         preemptiveMode->useRelativeSize = false;
         preemptiveMode->relativeWidth = -1.0f;
         preemptiveMode->relativeHeight = -1.0f;

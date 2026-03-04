@@ -2084,6 +2084,9 @@ void WriteDefaultConfig(const std::wstring& path) {
             } else if (mode.id == "Wide") {
                 mode.width = screenWidth;
             }
+
+            mode.manualWidth = mode.width;
+            mode.manualHeight = mode.height;
         }
 
         int eyezoomWindowWidth = defaultConfig.eyezoom.windowWidth;
@@ -2142,6 +2145,8 @@ void WriteDefaultConfig(const std::wstring& path) {
         fullscreenMode.id = "Fullscreen";
         fullscreenMode.width = screenWidth;
         fullscreenMode.height = screenHeight;
+        fullscreenMode.manualWidth = fullscreenMode.width;
+        fullscreenMode.manualHeight = fullscreenMode.height;
         fullscreenMode.stretch.enabled = true;
         fullscreenMode.stretch.width = screenWidth;
         fullscreenMode.stretch.height = screenHeight;
@@ -2229,6 +2234,8 @@ void LoadConfig() {
             fullscreenMode.id = "Fullscreen";
             fullscreenMode.width = screenWidth;
             fullscreenMode.height = screenHeight;
+            fullscreenMode.manualWidth = fullscreenMode.width;
+            fullscreenMode.manualHeight = fullscreenMode.height;
             fullscreenMode.stretch.enabled = true;
             fullscreenMode.stretch.x = 0;
             fullscreenMode.stretch.y = 0;
@@ -2244,6 +2251,8 @@ void LoadConfig() {
             eyezoomMode.id = "EyeZoom";
             eyezoomMode.width = 384;
             eyezoomMode.height = 16384;
+            eyezoomMode.manualWidth = eyezoomMode.width;
+            eyezoomMode.manualHeight = eyezoomMode.height;
             g_config.modes.push_back(eyezoomMode);
             Log("Created missing EyeZoom mode");
         }
@@ -2263,6 +2272,8 @@ void LoadConfig() {
                 preemptiveMode.id = "Preemptive";
                 preemptiveMode.width = eyezoomModePtr ? eyezoomModePtr->width : 384;
                 preemptiveMode.height = eyezoomModePtr ? eyezoomModePtr->height : 16384;
+                preemptiveMode.manualWidth = eyezoomModePtr ? eyezoomModePtr->manualWidth : preemptiveMode.width;
+                preemptiveMode.manualHeight = eyezoomModePtr ? eyezoomModePtr->manualHeight : preemptiveMode.height;
 
                 preemptiveMode.useRelativeSize = false;
                 preemptiveMode.widthExpr.clear();
@@ -2299,10 +2310,14 @@ void LoadConfig() {
                     if (eyezoomModePtr) {
                         if (preemptiveModePtr->width != eyezoomModePtr->width) {
                             preemptiveModePtr->width = eyezoomModePtr->width;
+                            preemptiveModePtr->manualWidth =
+                                (eyezoomModePtr->manualWidth > 0) ? eyezoomModePtr->manualWidth : eyezoomModePtr->width;
                             changed = true;
                         }
                         if (preemptiveModePtr->height != eyezoomModePtr->height) {
                             preemptiveModePtr->height = eyezoomModePtr->height;
+                            preemptiveModePtr->manualHeight =
+                                (eyezoomModePtr->manualHeight > 0) ? eyezoomModePtr->manualHeight : eyezoomModePtr->height;
                             changed = true;
                         }
                     }
@@ -2317,6 +2332,8 @@ void LoadConfig() {
             thinMode.id = "Thin";
             thinMode.width = 330;
             thinMode.height = screenHeight;
+            thinMode.manualWidth = thinMode.width;
+            thinMode.manualHeight = thinMode.height;
             thinMode.background.selectedMode = "color";
             thinMode.background.color = { 45 / 255.0f, 0 / 255.0f, 80 / 255.0f };
             thinMode.mirrorIds.push_back("Mapless");
@@ -2329,6 +2346,8 @@ void LoadConfig() {
             wideMode.id = "Wide";
             wideMode.width = screenWidth;
             wideMode.height = 400;
+            wideMode.manualWidth = wideMode.width;
+            wideMode.manualHeight = wideMode.height;
             wideMode.background.selectedMode = "color";
             wideMode.background.color = { 0.0f, 0.0f, 0.0f };
             wideMode.mirrorIds.push_back("Mapless");

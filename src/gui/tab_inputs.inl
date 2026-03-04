@@ -488,8 +488,20 @@ if (ImGui::BeginTabItem("Inputs")) {
                         return std::string("[Unbound]");
                     }
 
+                    const DWORD scanLow = (scan & 0xFF);
+                    if (scanLow == 0x45) {
+                        if (fallbackVk == VK_NUMLOCK) return VkToString(VK_NUMLOCK);
+                        if (fallbackVk == VK_PAUSE) return VkToString(VK_PAUSE);
+                    }
+
                     DWORD scanDisplayVK = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
-                    if (scanDisplayVK != 0) { return VkToString(scanDisplayVK); }
+                    if (scanDisplayVK != 0) {
+                        if (scanLow == 0x45 && (fallbackVk == VK_NUMLOCK || fallbackVk == VK_PAUSE) &&
+                            (scanDisplayVK == VK_NUMLOCK || scanDisplayVK == VK_PAUSE) && scanDisplayVK != fallbackVk) {
+                            scanDisplayVK = fallbackVk;
+                        }
+                        return VkToString(scanDisplayVK);
+                    }
 
                     LONG keyNameLParam = static_cast<LONG>((scan & 0xFF) << 16);
                     if ((scan & 0xFF00) != 0) { keyNameLParam |= (1 << 24); }

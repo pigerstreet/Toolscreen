@@ -523,11 +523,13 @@ void ProcessPendingDimensionChange() {
         if (g_pendingDimensionChange.newWidth > 0) {
             mode->width = EqualsIgnoreCase(mode->id, "Thin") ? (std::max)(330, g_pendingDimensionChange.newWidth)
                                                                : g_pendingDimensionChange.newWidth;
+            mode->manualWidth = mode->width;
             mode->widthExpr.clear();
             mode->relativeWidth = -1.0f;
         }
         if (g_pendingDimensionChange.newHeight > 0) {
             mode->height = g_pendingDimensionChange.newHeight;
+            mode->manualHeight = mode->height;
             mode->heightExpr.clear();
             mode->relativeHeight = -1.0f;
         }
@@ -557,10 +559,12 @@ void ProcessPendingDimensionChange() {
 
             if (preemptiveMode->width != eyezoomMode->width) {
                 preemptiveMode->width = eyezoomMode->width;
+                preemptiveMode->manualWidth = (eyezoomMode->manualWidth > 0) ? eyezoomMode->manualWidth : eyezoomMode->width;
                 preemptiveWasResynced = true;
             }
             if (preemptiveMode->height != eyezoomMode->height) {
                 preemptiveMode->height = eyezoomMode->height;
+                preemptiveMode->manualHeight = (eyezoomMode->manualHeight > 0) ? eyezoomMode->manualHeight : eyezoomMode->height;
                 preemptiveWasResynced = true;
             }
         }

@@ -3150,6 +3150,8 @@ if (ImGui::BeginTabItem("Modes")) {
         newMode.relativeHeight = 1.0f;
         newMode.width = GetCachedWindowWidth();
         newMode.height = GetCachedWindowHeight();
+        newMode.manualWidth = newMode.width;
+        newMode.manualHeight = newMode.height;
         newMode.stretch.width = 300;
         newMode.stretch.height = GetCachedWindowHeight();
         g_config.modes.push_back(newMode);

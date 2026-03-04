@@ -2783,10 +2783,13 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             static uint64_t s_frameNumber = 0;
             s_frameNumber++;
 
+            const int submitFullW = (std::max)(1, fullW);
+            const int submitFullH = (std::max)(1, fullH);
+
             FrameRenderRequest request;
             request.frameNumber = s_frameNumber;
-            request.fullW = fullW;
-            request.fullH = fullH;
+            request.fullW = submitFullW;
+            request.fullH = submitFullH;
             request.gameW = current_gameW;
             request.gameH = current_gameH;
             request.finalX = currentGeo.finalX;
