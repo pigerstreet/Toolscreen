@@ -182,6 +182,9 @@ if (ImGui::BeginTabItem("General")) {
                                   int defaultHeight, int maxWidth, int maxHeight,
                                   EyeZoomInlineKind eyezoomInline = EyeZoomInlineKind::None, bool readOnlyDimensions = false) {
         ModeConfig* modeConfig = GetModeConfig(modeId);
+        const bool relativeOnlySizing = EqualsIgnoreCase(modeId, "Fullscreen") || EqualsIgnoreCase(modeId, "Thin") || EqualsIgnoreCase(modeId, "Wide");
+        const int safeMaxWidth = (std::max)(1, maxWidth);
+        const int safeMaxHeight = (std::max)(1, maxHeight);
 
         EnsureHotkeyForMode(modeId);
 
@@ -195,7 +198,31 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         if (modeConfig) {
             ImGui::PushID((std::string(label) + "_width").c_str());
-            if (Spinner("##w", &modeConfig->width, 10, 1, maxWidth, 64, 3)) {
+            if (relativeOnlySizing) {
+                float minWidthPct = 1.0f;
+                if (EqualsIgnoreCase(modeId, "Thin")) {
+                    minWidthPct = (std::min)(100.0f, (330.0f / static_cast<float>(safeMaxWidth)) * 100.0f);
+                }
+
+                float widthPct = ((modeConfig->relativeWidth >= 0.0f && modeConfig->relativeWidth <= 1.0f)
+                                      ? modeConfig->relativeWidth
+                                      : (static_cast<float>(modeConfig->width) / static_cast<float>(safeMaxWidth))) *
+                                 100.0f;
+                widthPct = (std::max)(minWidthPct, (std::min)(100.0f, widthPct));
+
+                if (ImGui::SliderFloat("##w_pct", &widthPct, minWidthPct, 100.0f, "%.1f%%")) {
+                    modeConfig->useRelativeSize = true;
+                    if (!modeConfig->widthExpr.empty()) { modeConfig->widthExpr.clear(); }
+                    modeConfig->relativeWidth = widthPct / 100.0f;
+
+                    int computedWidth = static_cast<int>(modeConfig->relativeWidth * static_cast<float>(safeMaxWidth));
+                    if (EqualsIgnoreCase(modeId, "Thin")) {
+                        computedWidth = (std::max)(330, computedWidth);
+                    }
+                    modeConfig->width = (std::max)(1, computedWidth);
+                    g_configIsDirty = true;
+                }
+            } else if (Spinner("##w", &modeConfig->width, 10, 1, maxWidth, 64, 3)) {
                 if (!modeConfig->widthExpr.empty()) { modeConfig->widthExpr.clear(); }
                 modeConfig->relativeWidth = -1.0f;
                 g_configIsDirty = true;
@@ -206,7 +233,21 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         if (modeConfig) {
             ImGui::PushID((std::string(label) + "_height").c_str());
-            if (Spinner("##h", &modeConfig->height, 10, 1, maxHeight, 64, 3)) {
+            if (relativeOnlySizing) {
+                float heightPct = ((modeConfig->relativeHeight >= 0.0f && modeConfig->relativeHeight <= 1.0f)
+                                       ? modeConfig->relativeHeight
+                                       : (static_cast<float>(modeConfig->height) / static_cast<float>(safeMaxHeight))) *
+                                  100.0f;
+                heightPct = (std::max)(1.0f, (std::min)(100.0f, heightPct));
+
+                if (ImGui::SliderFloat("##h_pct", &heightPct, 1.0f, 100.0f, "%.1f%%")) {
+                    modeConfig->useRelativeSize = true;
+                    if (!modeConfig->heightExpr.empty()) { modeConfig->heightExpr.clear(); }
+                    modeConfig->relativeHeight = heightPct / 100.0f;
+                    modeConfig->height = (std::max)(1, static_cast<int>(modeConfig->relativeHeight * static_cast<float>(safeMaxHeight)));
+                    g_configIsDirty = true;
+                }
+            } else if (Spinner("##h", &modeConfig->height, 10, 1, maxHeight, 64, 3)) {
                 if (!modeConfig->heightExpr.empty()) { modeConfig->heightExpr.clear(); }
                 modeConfig->relativeHeight = -1.0f;
                 g_configIsDirty = true;
@@ -280,7 +321,7 @@ if (ImGui::BeginTabItem("General")) {
         int monitorHeight = GetCachedWindowHeight();
 
         RenderModeTableRow("Fullscreen", "Fullscreen", "fullscreen_hotkey", monitorWidth, monitorHeight, monitorWidth, monitorHeight,
-                           EyeZoomInlineKind::None, true);
+                           EyeZoomInlineKind::None, false);
 
         RenderModeTableRow("Thin", "Thin", "thin_hotkey", 400, monitorHeight, monitorWidth, monitorHeight, EyeZoomInlineKind::None);
 

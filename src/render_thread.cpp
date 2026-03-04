@@ -3406,7 +3406,9 @@ static void RenderThreadFunc(void* gameGLContext) {
                 if (hwnd) { RT_TryInitializeImGui(hwnd, cfg); }
             }
 
-            if (!hasAnyVisibleOverlay && !shouldRenderAnyImGui && !request.showWelcomeToast) {
+            const bool shouldRenderWelcomeToast = request.showWelcomeToast && !isObsRequest;
+
+            if (!hasAnyVisibleOverlay && !shouldRenderAnyImGui && !shouldRenderWelcomeToast) {
                 // Create fence for synchronization
                 GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
                 glFlush();
@@ -3809,7 +3811,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
             }
 
-            if (request.showWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
+            if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
 
             // Create fence to signal when GPU completes all rendering commands
             GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);

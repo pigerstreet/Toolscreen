@@ -1759,7 +1759,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     submission.context.windowW = windowWidth;
                     submission.context.windowH = windowHeight;
                     submission.context.welcomeToastIsFullscreen = EqualsIgnoreCase(modeToRenderCopy.id, "Fullscreen");
-                    submission.context.showWelcomeToast = true;
+                    submission.context.showWelcomeToast = false;
                     submission.isDualRenderingPath = hideAnimOnScreen;
 
                     // Create fence and flush - these MUST be on GL thread
