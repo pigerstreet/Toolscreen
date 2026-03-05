@@ -3245,7 +3245,7 @@ void RenderSettingsGUI() {
                 if (s_discordTexture != 0) {
                     float iconSize = ImGui::GetFrameHeight();
                     float margin = ImGui::GetStyle().ItemSpacing.x;
-                    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - buttonWidth - iconSize - margin - ImGui::GetStyle().WindowPadding.x, 30.0f));
+                    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowContentRegionMax().x - buttonWidth - iconSize - margin, 30.0f));
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
                     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
@@ -3261,7 +3261,7 @@ void RenderSettingsGUI() {
                 }
             }
 
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - buttonWidth - ImGui::GetStyle().WindowPadding.x, 30.0f));
+            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowContentRegionMax().x - buttonWidth, 30.0f));
 
             if (ImGui::Button(buttonLabel)) {
                 g_screenshotRequested = true;
