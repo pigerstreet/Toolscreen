@@ -1735,8 +1735,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
                     // Build lightweight context struct (no lock-free reads needed here - values already captured)
                     ObsFrameSubmission submission;
-                    submission.context.fullW = (std::max)(1, fullW);
-                    submission.context.fullH = (std::max)(1, fullH);
+                    submission.context.fullW = fullW;
+                    submission.context.fullH = fullH;
                     submission.context.gameW = current_gameW;
                     submission.context.gameH = current_gameH;
                     submission.context.gameTextureId = g_cachedGameTextureId.load();

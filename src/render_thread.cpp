@@ -4268,10 +4268,22 @@ FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualR
 
     ModeTransitionState transitionState = GetModeTransitionState();
 
+    int safeFullW = ctx.fullW;
+    int safeFullH = ctx.fullH;
+    if (safeFullW <= 1 || safeFullH <= 1) {
+        if (ctx.windowW > 1 && ctx.windowH > 1) {
+            safeFullW = ctx.windowW;
+            safeFullH = ctx.windowH;
+        } else if (ctx.gameW > 1 && ctx.gameH > 1) {
+            safeFullW = ctx.gameW;
+            safeFullH = ctx.gameH;
+        }
+    }
+
     FrameRenderRequest req;
     req.frameNumber = ++s_obsFrameNumber;
-    req.fullW = ctx.fullW;
-    req.fullH = ctx.fullH;
+    req.fullW = safeFullW;
+    req.fullH = safeFullH;
     req.gameW = ctx.gameW;
     req.gameH = ctx.gameH;
     req.gameTextureId = ctx.gameTextureId;
@@ -4334,8 +4346,8 @@ FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualR
                 finalW = viewport.stretchWidth;
                 finalH = viewport.stretchHeight;
             } else {
-                finalX = (ctx.fullW - ctx.gameW) / 2;
-                finalY = (ctx.fullH - ctx.gameH) / 2;
+                finalX = (req.fullW - ctx.gameW) / 2;
+                finalY = (req.fullH - ctx.gameH) / 2;
                 finalW = ctx.gameW;
                 finalH = ctx.gameH;
             }
@@ -4397,8 +4409,8 @@ FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualR
                 finalW = viewport.stretchWidth;
                 finalH = viewport.stretchHeight;
             } else {
-                finalX = (ctx.fullW - ctx.gameW) / 2;
-                finalY = (ctx.fullH - ctx.gameH) / 2;
+                finalX = (req.fullW - ctx.gameW) / 2;
+                finalY = (req.fullH - ctx.gameH) / 2;
                 finalW = ctx.gameW;
                 finalH = ctx.gameH;
             }
@@ -4422,7 +4434,7 @@ FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualR
         }
     }
 
-    if (ctx.isWindowed && ctx.windowW > 0 && ctx.windowH > 0) {
+    if (ctx.isWindowed && ctx.windowW > 1 && ctx.windowH > 1) {
         int contentW = ctx.windowW;
         int contentH = ctx.windowH;
 
