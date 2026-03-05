@@ -136,6 +136,55 @@ static void RT_WaitForConsumerFence(bool isObsRequest, int writeIdx) {
     }
 }
 
+static bool RT_IsSampleableTexture2D(GLuint texture, int* outW = nullptr, int* outH = nullptr, bool* outIsTexture = nullptr) {
+    if (outW) *outW = 0;
+    if (outH) *outH = 0;
+    if (outIsTexture) *outIsTexture = false;
+
+    if (texture == 0) return false;
+    if (glIsTexture(texture) != GL_TRUE) return false;
+    if (outIsTexture) *outIsTexture = true;
+
+    GLint prevTexture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTexture);
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    GLint texW = 0;
+    GLint texH = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &texW);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texH);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTexture));
+
+    if (outW) *outW = texW;
+    if (outH) *outH = texH;
+
+    return texW > 0 && texH > 0;
+}
+
+static void RT_LogInvalidTextureSampleThrottled(const std::string& stage, GLuint texture, int expectedW = 0, int expectedH = 0) {
+    static std::unordered_map<std::string, ULONGLONG> s_lastLogByStage;
+    constexpr ULONGLONG kLogIntervalMs = 2000;
+
+    ULONGLONG now = GetTickCount64();
+    auto it = s_lastLogByStage.find(stage);
+    if (it != s_lastLogByStage.end() && (now - it->second) < kLogIntervalMs) { return; }
+    s_lastLogByStage[stage] = now;
+
+    int actualW = 0;
+    int actualH = 0;
+    bool isTexture = false;
+    RT_IsSampleableTexture2D(texture, &actualW, &actualH, &isTexture);
+
+    std::string expectedStr;
+    if (expectedW > 0 && expectedH > 0) {
+        expectedStr = " expected=" + std::to_string(expectedW) + "x" + std::to_string(expectedH);
+    }
+
+    LogCategory("texture_ops", "Render Thread: Invalid texture sample stage=" + stage + " tex=" + std::to_string(texture) +
+                                   " isTexture=" + std::to_string(isTexture ? 1 : 0) + " actual=" +
+                                   std::to_string(actualW) + "x" + std::to_string(actualH) + expectedStr);
+}
+
 // Last known good texture - updated only after GPU fence confirms rendering complete
 static std::atomic<GLuint> g_lastGoodTexture{ 0 };
 static std::atomic<GLuint> g_lastGoodObsTexture{ 0 };
@@ -181,6 +230,8 @@ static bool g_vcComputePending = false;
 static bool g_vcReadbackPending = false;
 static int g_vcRequestedOutWidth = 0;
 static int g_vcRequestedOutHeight = 0;
+static int g_vcRequestedSrcWidth = 0;
+static int g_vcRequestedSrcHeight = 0;
 
 static GLuint g_vcCursorFBO = 0;
 static GLuint g_vcCursorTexture = 0;
@@ -1308,6 +1359,8 @@ static void CleanupRenderFBOs() {
     g_vcReadbackPending = false;
     g_vcRequestedOutWidth = 0;
     g_vcRequestedOutHeight = 0;
+    g_vcRequestedSrcWidth = 0;
+    g_vcRequestedSrcHeight = 0;
 
     if (g_vcCursorFBO != 0) {
         glDeleteFramebuffers(1, &g_vcCursorFBO);
@@ -1376,6 +1429,10 @@ static void EnsureVCScaleResources(int w, int h) {
 
 static GLuint PrepareVirtualCameraOutputTexture(GLuint srcTexture, int srcW, int srcH, int outW, int outH) {
     if (srcTexture == 0 || srcW <= 0 || srcH <= 0 || outW <= 0 || outH <= 0) { return 0; }
+    if (!RT_IsSampleableTexture2D(srcTexture)) {
+        RT_LogInvalidTextureSampleThrottled("virtual_camera_source", srcTexture, srcW, srcH);
+        return 0;
+    }
     if (srcW == outW && srcH == outH) { return srcTexture; }
 
     EnsureVCScaleResources(outW, outH);
@@ -1497,6 +1554,8 @@ static void ResetVirtualCameraAsyncPipeline() {
 
     g_vcOutWidth = 0;
     g_vcOutHeight = 0;
+    g_vcRequestedSrcWidth = 0;
+    g_vcRequestedSrcHeight = 0;
 }
 
 static void StartVirtualCameraComputeReadback(GLuint srcTexture, int texW, int texH, int outW, int outH) {
@@ -1630,10 +1689,14 @@ static void StartVirtualCameraAsyncReadback(GLuint obsTexture, int width, int he
     if ((outH & 1) != 0) outH -= 1;
     if (outW <= 0 || outH <= 0) { return; }
 
-    if (outW != g_vcRequestedOutWidth || outH != g_vcRequestedOutHeight) {
+    const bool outputSizeChanged = (outW != g_vcRequestedOutWidth || outH != g_vcRequestedOutHeight);
+    const bool sourceSizeChanged = (width != g_vcRequestedSrcWidth || height != g_vcRequestedSrcHeight);
+    if (outputSizeChanged || sourceSizeChanged) {
         ResetVirtualCameraAsyncPipeline();
         g_vcRequestedOutWidth = outW;
         g_vcRequestedOutHeight = outH;
+        g_vcRequestedSrcWidth = width;
+        g_vcRequestedSrcHeight = height;
     }
 
     if (!ShouldCaptureVirtualCameraFrame()) return;
@@ -2160,6 +2223,10 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
         const MirrorConfig& conf = *renderData.config;
         const float effectiveOpacity = modeOpacity * conf.opacity;
         if (effectiveOpacity <= 0.0f) continue;
+        if (!RT_IsSampleableTexture2D(renderData.texture)) {
+            RT_LogInvalidTextureSampleThrottled("mirror_texture:" + conf.name, renderData.texture, renderData.tex_w, renderData.tex_h);
+            continue;
+        }
         glUniform1f(rt_backgroundShaderLocs.opacity, effectiveOpacity);
 
         glBindTexture(GL_TEXTURE_2D, renderData.texture);
@@ -3270,6 +3337,28 @@ static void RenderThreadFunc(void* gameGLContext) {
                     }
                 }
 
+                if (readyTex != 0 && srcW > 0 && srcH > 0 && !RT_IsSampleableTexture2D(readyTex)) {
+                    RT_LogInvalidTextureSampleThrottled("obs_ready_texture", readyTex, srcW, srcH);
+                    GLuint safeTex = GetSafeReadTexture();
+                    int safeW = GetFallbackGameWidth();
+                    int safeH = GetFallbackGameHeight();
+                    if (safeW <= 0 || safeH <= 0) {
+                        safeW = request.fullW;
+                        safeH = request.fullH;
+                    }
+
+                    if (safeTex != 0 && safeW > 0 && safeH > 0 && RT_IsSampleableTexture2D(safeTex)) {
+                        readyTex = safeTex;
+                        srcW = safeW;
+                        srcH = safeH;
+                    } else {
+                        if (safeTex != 0) {
+                            RT_LogInvalidTextureSampleThrottled("obs_safe_texture", safeTex, safeW, safeH);
+                        }
+                        readyTex = 0;
+                    }
+                }
+
                 if (readyTex != 0 && srcW > 0 && srcH > 0) {
                     int uvSrcW = srcW;
                     int uvSrcH = srcH;
@@ -3478,6 +3567,28 @@ static void RenderThreadFunc(void* gameGLContext) {
                             srcW = request.fullW;
                             srcH = request.fullH;
                         }
+                    }
+                }
+
+                if (readyTex != 0 && srcW > 0 && srcH > 0 && !RT_IsSampleableTexture2D(readyTex)) {
+                    RT_LogInvalidTextureSampleThrottled("eyezoom_ready_texture", readyTex, srcW, srcH);
+                    GLuint safeTex = GetSafeReadTexture();
+                    int safeW = GetFallbackGameWidth();
+                    int safeH = GetFallbackGameHeight();
+                    if (safeW <= 0 || safeH <= 0) {
+                        safeW = request.fullW;
+                        safeH = request.fullH;
+                    }
+
+                    if (safeTex != 0 && safeW > 0 && safeH > 0 && RT_IsSampleableTexture2D(safeTex)) {
+                        readyTex = safeTex;
+                        srcW = safeW;
+                        srcH = safeH;
+                    } else {
+                        if (safeTex != 0) {
+                            RT_LogInvalidTextureSampleThrottled("eyezoom_safe_texture", safeTex, safeW, safeH);
+                        }
+                        readyTex = 0;
                     }
                 }
 
