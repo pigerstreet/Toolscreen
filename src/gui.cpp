@@ -3210,41 +3210,48 @@ void RenderSettingsGUI() {
                     s_discordLastCtx = currentCtx;
                 }
 
-                if (s_discordTexture == 0) {
+                auto ensureDiscordTextureLoaded = [&]() {
+                    if (s_discordTexture != 0) return;
+
                     HMODULE hModule = NULL;
                     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                        (LPCWSTR)&g_showGui, &hModule);
-                    if (hModule) {
-                        HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_DISCORD_PNG), RT_RCDATA);
-                        if (hResource) {
-                            HGLOBAL hData = LoadResource(hModule, hResource);
-                            if (hData) {
-                                DWORD dataSize = SizeofResource(hModule, hResource);
-                                const unsigned char* rawData = (const unsigned char*)LockResource(hData);
-                                if (rawData && dataSize > 0) {
-                                    stbi_set_flip_vertically_on_load_thread(0);
-                                    int w = 0, h = 0, channels = 0;
-                                    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
-                                    if (pixels && w > 0 && h > 0) {
-                                        glGenTextures(1, &s_discordTexture);
-                                        glBindTexture(GL_TEXTURE_2D, s_discordTexture);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                                        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                                        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-                                        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-                                        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-                                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-                                        glBindTexture(GL_TEXTURE_2D, 0);
-                                        stbi_image_free(pixels);
-                                    }
-                                }
-                            }
-                        }
+                    if (!hModule) return;
+
+                    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_DISCORD_PNG), RT_RCDATA);
+                    if (!hResource) return;
+
+                    HGLOBAL hData = LoadResource(hModule, hResource);
+                    if (!hData) return;
+
+                    DWORD dataSize = SizeofResource(hModule, hResource);
+                    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
+                    if (!rawData || dataSize == 0) return;
+
+                    stbi_set_flip_vertically_on_load_thread(0);
+                    int w = 0, h = 0, channels = 0;
+                    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
+                    if (!pixels || w <= 0 || h <= 0) {
+                        if (pixels) stbi_image_free(pixels);
+                        return;
                     }
-                }
+
+                    glGenTextures(1, &s_discordTexture);
+                    glBindTexture(GL_TEXTURE_2D, s_discordTexture);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+                    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    stbi_image_free(pixels);
+                };
+
+                ensureDiscordTextureLoaded();
 
                 if (s_discordTexture != 0) {
                     float iconSize = ImGui::GetFrameHeight();
