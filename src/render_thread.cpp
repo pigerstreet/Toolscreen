@@ -273,6 +273,41 @@ static int rt_eyeZoomSnapshotWidth = 0;
 static int rt_eyeZoomSnapshotHeight = 0;
 static bool rt_eyeZoomSnapshotValid = false;
 
+enum RenderCalibrationExcludeSlot : int {
+    RCES_RENDER_FBO_0 = 0,
+    RCES_RENDER_FBO_1,
+    RCES_RENDER_FBO_2,
+    RCES_OBS_FBO_0,
+    RCES_OBS_FBO_1,
+    RCES_OBS_FBO_2,
+    RCES_VC_SCALE,
+    RCES_VC_CURSOR,
+    RCES_VC_Y_0,
+    RCES_VC_Y_1,
+    RCES_VC_UV_0,
+    RCES_VC_UV_1,
+    RCES_EYEZOOM_SNAPSHOT,
+    RCES_COUNT
+};
+
+static std::atomic<GLuint> g_renderCalibrationExcludeTextures[RCES_COUNT] = {};
+
+static void RT_SetCalibrationExcludeTexture(RenderCalibrationExcludeSlot slot, GLuint texture) {
+    g_renderCalibrationExcludeTextures[static_cast<int>(slot)].store(texture, std::memory_order_release);
+}
+
+static void RT_SetCalibrationExcludeRenderFboTexture(int index, GLuint texture) {
+    if (index >= 0 && index < RENDER_THREAD_FBO_COUNT) {
+        RT_SetCalibrationExcludeTexture(static_cast<RenderCalibrationExcludeSlot>(RCES_RENDER_FBO_0 + index), texture);
+    }
+}
+
+static void RT_SetCalibrationExcludeObsFboTexture(int index, GLuint texture) {
+    if (index >= 0 && index < RENDER_THREAD_FBO_COUNT) {
+        RT_SetCalibrationExcludeTexture(static_cast<RenderCalibrationExcludeSlot>(RCES_OBS_FBO_0 + index), texture);
+    }
+}
+
 static std::atomic<uint64_t> g_framesRendered{ 0 };
 static std::atomic<uint64_t> g_framesDropped{ 0 };
 static std::atomic<double> g_avgRenderTimeMs{ 0.0 };
@@ -1154,6 +1189,7 @@ static void InitRenderFBOs(int width, int height) {
         if (fbo.fbo == 0) { glGenFramebuffers(1, &fbo.fbo); }
 
         if (fbo.texture == 0) { glGenTextures(1, &fbo.texture); }
+        RT_SetCalibrationExcludeRenderFboTexture(i, fbo.texture);
 
         if (fbo.stencilRbo == 0) { glGenRenderbuffers(1, &fbo.stencilRbo); }
 
@@ -1212,6 +1248,7 @@ static void InitRenderFBOs(int width, int height) {
         if (fbo.fbo == 0) { glGenFramebuffers(1, &fbo.fbo); }
 
         if (fbo.texture == 0) { glGenTextures(1, &fbo.texture); }
+        RT_SetCalibrationExcludeObsFboTexture(i, fbo.texture);
 
         if (fbo.stencilRbo == 0) { glGenRenderbuffers(1, &fbo.stencilRbo); }
 
@@ -1274,6 +1311,7 @@ static void CleanupRenderFBOs() {
             glDeleteTextures(1, &fbo.texture);
             fbo.texture = 0;
         }
+        RT_SetCalibrationExcludeRenderFboTexture(i, 0);
         if (fbo.stencilRbo != 0) {
             glDeleteRenderbuffers(1, &fbo.stencilRbo);
             fbo.stencilRbo = 0;
@@ -1297,6 +1335,7 @@ static void CleanupRenderFBOs() {
             glDeleteTextures(1, &fbo.texture);
             fbo.texture = 0;
         }
+        RT_SetCalibrationExcludeObsFboTexture(i, 0);
         if (fbo.stencilRbo != 0) {
             glDeleteRenderbuffers(1, &fbo.stencilRbo);
             fbo.stencilRbo = 0;
@@ -1327,10 +1366,12 @@ static void CleanupRenderFBOs() {
             glDeleteTextures(1, &g_vcYImage[i]);
             g_vcYImage[i] = 0;
         }
+        RT_SetCalibrationExcludeTexture(static_cast<RenderCalibrationExcludeSlot>(RCES_VC_Y_0 + i), 0);
         if (g_vcUVImage[i] != 0) {
             glDeleteTextures(1, &g_vcUVImage[i]);
             g_vcUVImage[i] = 0;
         }
+        RT_SetCalibrationExcludeTexture(static_cast<RenderCalibrationExcludeSlot>(RCES_VC_UV_0 + i), 0);
         if (g_vcReadbackPBO[i] != 0) {
             glDeleteBuffers(1, &g_vcReadbackPBO[i]);
             g_vcReadbackPBO[i] = 0;
@@ -1352,6 +1393,7 @@ static void CleanupRenderFBOs() {
         glDeleteTextures(1, &g_vcScaleTexture);
         g_vcScaleTexture = 0;
     }
+    RT_SetCalibrationExcludeTexture(RCES_VC_SCALE, 0);
     g_vcOutWidth = 0;
     g_vcOutHeight = 0;
     g_vcReadbackIdx = 0;
@@ -1370,8 +1412,11 @@ static void CleanupRenderFBOs() {
         glDeleteTextures(1, &g_vcCursorTexture);
         g_vcCursorTexture = 0;
     }
+    RT_SetCalibrationExcludeTexture(RCES_VC_CURSOR, 0);
     g_vcCursorWidth = 0;
     g_vcCursorHeight = 0;
+
+    RT_SetCalibrationExcludeTexture(RCES_EYEZOOM_SNAPSHOT, 0);
 }
 
 static void AdvanceWriteFBO() {
@@ -1411,6 +1456,7 @@ static void EnsureVCScaleResources(int w, int h) {
     if (g_vcScaleFBO == 0) glGenFramebuffers(1, &g_vcScaleFBO);
     if (g_vcScaleTexture != 0) glDeleteTextures(1, &g_vcScaleTexture);
     glGenTextures(1, &g_vcScaleTexture);
+    RT_SetCalibrationExcludeTexture(RCES_VC_SCALE, g_vcScaleTexture);
     glBindTexture(GL_TEXTURE_2D, g_vcScaleTexture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1480,6 +1526,7 @@ static void EnsureVCImageResources(int w, int h) {
     for (int i = 0; i < 2; i++) {
         if (g_vcYImage[i] != 0) glDeleteTextures(1, &g_vcYImage[i]);
         glGenTextures(1, &g_vcYImage[i]);
+        RT_SetCalibrationExcludeTexture(static_cast<RenderCalibrationExcludeSlot>(RCES_VC_Y_0 + i), g_vcYImage[i]);
         glBindTexture(GL_TEXTURE_2D, g_vcYImage[i]);
         glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8UI, w, h);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -1488,6 +1535,7 @@ static void EnsureVCImageResources(int w, int h) {
 
         if (g_vcUVImage[i] != 0) glDeleteTextures(1, &g_vcUVImage[i]);
         glGenTextures(1, &g_vcUVImage[i]);
+        RT_SetCalibrationExcludeTexture(static_cast<RenderCalibrationExcludeSlot>(RCES_VC_UV_0 + i), g_vcUVImage[i]);
         glBindTexture(GL_TEXTURE_2D, g_vcUVImage[i]);
         glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8UI, w, h / 2);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -1833,6 +1881,7 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
             if (rt_eyeZoomSnapshotFBO != 0) { glDeleteFramebuffers(1, &rt_eyeZoomSnapshotFBO); }
 
             glGenTextures(1, &rt_eyeZoomSnapshotTexture);
+            RT_SetCalibrationExcludeTexture(RCES_EYEZOOM_SNAPSHOT, rt_eyeZoomSnapshotTexture);
             glBindTexture(GL_TEXTURE_2D, rt_eyeZoomSnapshotTexture);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -3956,6 +4005,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                         if (g_vcCursorFBO == 0) { glGenFramebuffers(1, &g_vcCursorFBO); }
 
                         glGenTextures(1, &g_vcCursorTexture);
+                        RT_SetCalibrationExcludeTexture(RCES_VC_CURSOR, g_vcCursorTexture);
                         glBindTexture(GL_TEXTURE_2D, g_vcCursorTexture);
                         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, vcW, vcH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -4368,6 +4418,16 @@ GLsync GetCompletedObsFence() {
     // Return the fence associated with the last good OBS texture
     // This is more efficient than glFinish() as it only waits for the render thread's commands
     return g_lastGoodObsFence.load(std::memory_order_acquire);
+}
+
+void GetRenderThreadCalibrationExcludeTextureIds(std::vector<GLuint>& outTextureIds) {
+    outTextureIds.clear();
+    outTextureIds.reserve(RCES_COUNT);
+
+    for (int i = 0; i < RCES_COUNT; ++i) {
+        GLuint texture = g_renderCalibrationExcludeTextures[i].load(std::memory_order_acquire);
+        if (texture != 0) { outTextureIds.push_back(texture); }
+    }
 }
 
 FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualRenderingPath) {

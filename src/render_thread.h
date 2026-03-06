@@ -179,6 +179,10 @@ GLuint GetCompletedObsTexture();
 // The caller must NOT delete this fence; it is managed by the render thread.
 GLsync GetCompletedObsFence();
 
+// Collect current internal texture IDs that should never be selected by game-texture calibration.
+// Thread-safe snapshot: IDs are published through atomics.
+void GetRenderThreadCalibrationExcludeTextureIds(std::vector<GLuint>& outTextureIds);
+
 struct ObsFrameContext {
     int fullW = 0, fullH = 0;
     int gameW = 0, gameH = 0;

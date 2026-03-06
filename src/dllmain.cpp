@@ -17,6 +17,7 @@
 #include "window_overlay.h"
 
 #include "MinHook.h"
+#include <array>
 #include <DbgHelp.h>
 #include <Psapi.h>
 #include <ShlObj.h>
@@ -1131,12 +1132,40 @@ GLuint CalculateGameTextureId() {
 
     Log("CalculateGameTextureId: Looking for texture with dimensions " + std::to_string(targetWidth) + "x" + std::to_string(targetHeight));
 
-    const GLuint maxCheckRange = 1000;
+    constexpr GLuint kMaxCheckRange = 1000;
+
+    std::array<uint8_t, kMaxCheckRange> excludedTextureMask{};
+    size_t excludedTextureCount = 0;
+    auto markExcludedTexture = [&](GLuint textureId) {
+        if (textureId != 0 && textureId != UINT_MAX && textureId < kMaxCheckRange && excludedTextureMask[textureId] == 0) {
+            excludedTextureMask[textureId] = 1;
+            ++excludedTextureCount;
+        }
+    };
+
+    {
+        GLuint obsOverrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
+        markExcludedTexture(obsOverrideTexture);
+
+        GLuint obsCaptureTexture = GetObsCaptureTexture();
+        markExcludedTexture(obsCaptureTexture);
+
+        std::vector<GLuint> renderThreadExcludedTextureIds;
+        GetRenderThreadCalibrationExcludeTextureIds(renderThreadExcludedTextureIds);
+        for (GLuint id : renderThreadExcludedTextureIds) { markExcludedTexture(id); }
+    }
+
+    if (excludedTextureCount > 0) {
+        Log("CalculateGameTextureId: Excluding " + std::to_string(excludedTextureCount) +
+            " internal texture IDs from calibration");
+    }
 
     GLint oldTexture = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
 
-    for (GLuint texId = 0; texId < maxCheckRange; texId++) {
+    for (GLuint texId = 0; texId < kMaxCheckRange; texId++) {
+        if (excludedTextureMask[texId] != 0) { continue; }
+
         if (!glIsTexture(texId)) { continue; }
 
         glBindTexture(GL_TEXTURE_2D, texId);
@@ -1180,7 +1209,7 @@ GLuint CalculateGameTextureId() {
         glBindTexture(GL_TEXTURE_2D, oldTexture);
     }
 
-    Log("CalculateGameTextureId: No matching texture found in range 1-" + std::to_string(maxCheckRange));
+    Log("CalculateGameTextureId: No matching texture found in range 1-" + std::to_string(kMaxCheckRange));
     return UINT_MAX;
 }
 
