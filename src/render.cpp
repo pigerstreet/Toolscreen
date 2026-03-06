@@ -2505,12 +2505,10 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                 GetCursorPos(&mousePos);
                 ScreenToClient(hwnd, &mousePos);
 
-                if (mousePos.x >= s.vp[0] && mousePos.x < (s.vp[0] + s.vp[2]) && mousePos.y >= s.vp[1] &&
-                    mousePos.y < (s.vp[1] + s.vp[3])) {
+                bool leftButtonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 
-                    bool leftButtonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-
-                    std::string hoveredImage = "";
+                std::string hoveredImage = "";
+                {
                     const auto& dragImages = configSnap ? configSnap->images : std::vector<ImageConfig>{};
 
                     // Drag mode is rare, but this is on the game thread, so keep it cheap.
@@ -2577,35 +2575,33 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         s_dragStartPos = mousePos;
                         s_lastMousePos = mousePos;
                     }
-                    else if (leftButtonDown && s_isDragging && !s_draggedImageName.empty()) {
-                        int deltaX = mousePos.x - s_lastMousePos.x;
-                        int deltaY = mousePos.y - s_lastMousePos.y;
-
-                        if (deltaX != 0 || deltaY != 0) {
-                            // NOTE: This mutates g_config from the game thread. Safe because:
-                            // 1. Only this thread writes drag x/y (no concurrent x/y writers)
-                            // 2. GUI thread won't resize images vector during drag mode (drag mode disables GUI interaction)
-                            {
-                                for (auto& img : g_config.images) {
-                                    if (img.name == s_draggedImageName) {
-                                        img.x += deltaX;
-                                        img.y += deltaY;
-                                        g_configIsDirty = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            s_lastMousePos = mousePos;
-                        }
-                    }
-                    else if (!leftButtonDown && s_isDragging) {
-                        s_isDragging = false;
-                        s_draggedImageName = "";
-                    }
-
-                    s_hoveredImageName = hoveredImage;
                 }
+
+                if (leftButtonDown && s_isDragging && !s_draggedImageName.empty()) {
+                    int deltaX = mousePos.x - s_lastMousePos.x;
+                    int deltaY = mousePos.y - s_lastMousePos.y;
+
+                    if (deltaX != 0 || deltaY != 0) {
+                        // NOTE: This mutates g_config from the game thread. Safe because:
+                        // 1. Only this thread writes drag x/y (no concurrent x/y writers)
+                        // 2. GUI thread won't resize images vector during drag mode (drag mode disables GUI interaction)
+                        for (auto& img : g_config.images) {
+                            if (img.name == s_draggedImageName) {
+                                img.x += deltaX;
+                                img.y += deltaY;
+                                g_configIsDirty = true;
+                                break;
+                            }
+                        }
+                        s_lastMousePos = mousePos;
+                    }
+                }
+                else if (!leftButtonDown && s_isDragging) {
+                    s_isDragging = false;
+                    s_draggedImageName = "";
+                }
+
+                s_hoveredImageName = hoveredImage;
             }
         }
     } else {
