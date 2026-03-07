@@ -1,3 +1,4 @@
+lang='en'
 disableHookChaining = false
 hookChainingNextTarget = 'Original'
 allowCursorEscape = true

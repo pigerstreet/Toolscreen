@@ -10,6 +10,10 @@
 !docs
 !docs/images/
 !docs/images/screenshot.png
+!lang
+!lang/langs.json
+!lang/en.json
+!lang/zh_CN.json
 !.github
 !.github/ISSUE_TEMPLATE/
 !.github/ISSUE_TEMPLATE/*.yml

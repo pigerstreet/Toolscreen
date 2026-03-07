@@ -452,6 +452,7 @@ struct Config {
     std::vector<DWORD> windowOverlaysHotkey = {};
     CursorsConfig cursors;
     std::string fontPath = "c:\\Windows\\Fonts\\Arial.ttf";
+    std::string lang = "en";
     int fpsLimit = 0;
     int fpsLimitSleepThreshold = 1000;
     MirrorGammaMode mirrorGammaMode = MirrorGammaMode::Auto;

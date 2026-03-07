@@ -10,6 +10,7 @@
 #include "render_thread.h"
 #include "resource.h"
 #include "shared_contexts.h"
+#include "translation.h"
 #include "hook_chain.h"
 #include "utils.h"
 #include "version.h"
@@ -2054,6 +2055,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         LoadConfig();
+
+        LoadLangs();
+        LogCategory("init", "Languages list loaded.");
+
+        if (!LoadTranslation(g_config.lang)) {
+            Log("FATAL: Could not load translations of " + g_config.lang);
+            return TRUE;
+        }
+        LogCategory("init", "Loaded translations for language: " + g_config.lang);
 
         WCHAR dir[MAX_PATH];
         if (GetCurrentDirectoryW(MAX_PATH, dir) > 0) {
