@@ -19,7 +19,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
 
         std::string delete_button_label = "X##delete_mirror_" + std::to_string(i);
         if (ImGui::Button(delete_button_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
-            std::string popup_id = tr("mirrors.delete_mirror") + "##" + std::to_string(i);
+            std::string popup_id = "Delete Mirror?##" + std::to_string(i);
             ImGui::OpenPopup(popup_id.c_str());
         }
 
@@ -578,7 +578,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             if (ImGui::BeginTable("zones_table", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
                 ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthFixed, 150.0f);
                 ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-                ImGui::TableSetupColumn("Relative To", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(trc("mirrors.relative_to"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("##delete_col", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight() + 4.0f);
                 ImGui::TableHeadersRow();
                 for (size_t j = 0; j < mirror.input.size(); ++j) {

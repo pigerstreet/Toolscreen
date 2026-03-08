@@ -1895,7 +1895,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                    HelpMarker(trc("modes.tooltip.override_sensitivity"));
 
                     if (mode.sensitivityOverrideEnabled) {
                         if (ImGui::Checkbox(trc("modes.separate_xy_sensitivity"), &mode.separateXYSensitivity)) {
@@ -1906,30 +1906,30 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(trc("modes.tooltip.separate_xy_sensitivity"));
 
                         if (mode.separateXYSensitivity) {
                             RawInputSensitivityNote();
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity_x"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##ThinSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                             RawInputSensitivityNote();
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity_y"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##ThinSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
                             RawInputSensitivityNote();
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##ThinSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(trc("modes.tooltip.sensitivity"));
                         }
                     }
                     ImGui::TreePop();
@@ -2319,7 +2319,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                    HelpMarker(trc("modes.tooltip.override_sensitivity"));
 
                     if (mode.sensitivityOverrideEnabled) {
                         if (ImGui::Checkbox(trc("modes.separate_xy_sensitivity"), &mode.separateXYSensitivity)) {
@@ -2330,30 +2330,30 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(trc("modes.tooltip.separate_xy_sensitivity"));
 
                         if (mode.separateXYSensitivity) {
                             RawInputSensitivityNote();
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity_x"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##WideSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                             RawInputSensitivityNote();
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity_y"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##WideSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
                             RawInputSensitivityNote();
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##WideSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(trc("modes.tooltip.sensitivity"));
                         }
                     }
                     ImGui::TreePop();
@@ -2377,24 +2377,25 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
             std::string delete_button_label = "X##delete_mode_" + std::to_string(i);
             if (ImGui::Button(delete_button_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
-                std::string popup_id = (tr("modes.delete_mode") + "##" + std::to_string(i));
+                std::string popup_id = "Delete Mode?##" + std::to_string(i);
                 ImGui::OpenPopup(popup_id.c_str());
             }
 
             if (!resolutionSupported) { ImGui::EndDisabled(); }
 
-            std::string popup_id = (tr("modes.delete_mode") + "##" + std::to_string(i));
+            // Popup modal outside of node_open block so it can be displayed even when collapsed
+            std::string popup_id = "Delete Mode?##" + std::to_string(i);
             if (ImGui::BeginPopupModal(popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("%s", tr("modes.delete_mode_confirm", mode.id.c_str()).c_str());
+                ImGui::Text("Are you sure you want to delete mode '%s'?\nThis cannot be undone.", mode.id.c_str());
                 ImGui::Separator();
-                if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
+                if (ImGui::Button("OK", ImVec2(120, 0))) {
                     mode_to_remove = (int)i;
                     g_configIsDirty = true;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SetItemDefaultFocus();
                 ImGui::SameLine();
-                if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+                if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
                 ImGui::EndPopup();
             }
 
@@ -3024,7 +3025,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                    HelpMarker(trc("modes.tooltip.override_sensitivity"));
 
                     if (mode.sensitivityOverrideEnabled) {
                         if (ImGui::Checkbox(trc("modes.separate_xy_sensitivity"), &mode.separateXYSensitivity)) {
@@ -3035,30 +3036,30 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(trc("modes.tooltip.separate_xy_sensitivity"));
 
                         if (mode.separateXYSensitivity) {
                             RawInputSensitivityNote();
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity_x"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##ModeSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                             RawInputSensitivityNote();
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity_y"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##ModeSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
                             RawInputSensitivityNote();
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(trc("modes.sensitivity"));
                             ImGui::SetNextItemWidth(200);
                             if (ImGui::SliderFloat("##ModeSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(trc("modes.tooltip.sensitivity"));
                         }
                     }
                     ImGui::TreePop();

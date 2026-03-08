@@ -36,7 +36,7 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     ImGui::Spacing();
     ImGui::SeparatorText(trc("settings.mirrors"));
     {
-        const char* gammaModes[] = { "Auto", "Assume sRGB", "Assume Linear" };
+        const char* gammaModes[] = { trc("settings.mirrors_auto"), trc("settings.mirrors_assume_srgb"), trc("settings.mirrors_assume_linear") };
         int gm = static_cast<int>(g_config.mirrorGammaMode);
         ImGui::SetNextItemWidth(250);
         if (ImGui::Combo(trc("settings.mirrors_match_colorspace"), &gm, gammaModes, IM_ARRAYSIZE(gammaModes))) {

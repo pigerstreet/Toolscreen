@@ -168,7 +168,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::SeparatorText(trc("hotkeys.target_mode"));
                 ImGui::SetNextItemWidth(150);
                 const char* modeDisplay = hotkey.secondaryMode.empty() ? trc("hotkeys.none") : hotkey.secondaryMode.c_str();
-                if (ImGui::BeginCombo("Mode", modeDisplay)) {
+                if (ImGui::BeginCombo(trc("hotkeys.modes"), modeDisplay)) {
                     if (ImGui::Selectable(trc("hotkeys.none"), hotkey.secondaryMode.empty())) {
                         hotkey.secondaryMode = "";
                         SetHotkeySecondaryMode(i, "");
@@ -217,7 +217,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
 
                     ImGui::SetNextItemWidth(150);
                     const char* altModeDisplay = alt.mode.empty() ? trc("hotkeys.none") : alt.mode.c_str();
-                    if (ImGui::BeginCombo("Mode", altModeDisplay)) {
+                    if (ImGui::BeginCombo(trc("hotkeys.modes"), altModeDisplay)) {
                         if (ImGui::Selectable(trc("hotkeys.none"), alt.mode.empty())) {
                             alt.mode = "";
                             g_configIsDirty = true;

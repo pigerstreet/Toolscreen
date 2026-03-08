@@ -101,7 +101,7 @@ if (ImGui::BeginTabItem(trc("tabs.other"))) {
             MarkHotkeyBindingActive();
     }
     ImGui::SameLine();
-    HelpMarker("Toggles the game window between its previous windowed size and a borderless, monitor-sized window.");
+    HelpMarker(trc("tooltip.toggle_borderless"));
     ImGui::PopID();
 
     {
@@ -114,7 +114,7 @@ if (ImGui::BeginTabItem(trc("tabs.other"))) {
             g_configIsDirty = true;
         }
         ImGui::SameLine();
-        HelpMarker("Automatically puts Minecraft in borderless mode when the window is detected on startup.");
+        HelpMarker(trc("tooltip.auto_borderless"));
         ImGui::PopID();
     }
 
@@ -128,13 +128,11 @@ if (ImGui::BeginTabItem(trc("tabs.other"))) {
         g_configIsDirty = true;
     }
     ImGui::SameLine();
-    HelpMarker("Limits the game's maximum frame rate.\n"
-               "Lower FPS can reduce GPU load and power consumption.");
+    HelpMarker(trc("tooltip.fps_limit.advanced"));
 
     if (ImGui::Checkbox(trc("label.hide_animations_in_game"), &g_config.hideAnimationsInGame)) { g_configIsDirty = true; }
     ImGui::SameLine();
-    HelpMarker("When enabled, mode transitions appear instant on your screen,\n"
-               "but OBS Game Capture will show the animations.");
+    HelpMarker(trc("tooltip.hide_animations_in_game"));
 
 /*    if (ImGui::Checkbox("Disable Fullscreen Prompt", &g_config.disableFullscreenPrompt)) { g_configIsDirty = true; }
     ImGui::SameLine();
@@ -151,7 +149,7 @@ if (ImGui::BeginTabItem(trc("tabs.other"))) {
     ImGui::SetNextItemWidth(300);
     if (ImGui::InputText("##FontPath", &g_config.fontPath)) { g_configIsDirty = true; }
     ImGui::SameLine();
-    HelpMarker("Path to a .ttf font file for the GUI. Restart required for changes to take effect.");
+    HelpMarker(trc("tooltip.font"));
 
     ImGui::EndTabItem();
 }

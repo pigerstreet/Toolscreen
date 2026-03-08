@@ -36,27 +36,29 @@ bool SpinnerFloat(const char* id_label, float* v, float step = 0.1f, float min_v
 
 
 inline const std::vector<std::pair<const char*, const char*>>& GetRelativeToOptions() {
-    static const std::vector<std::pair<const char*, const char*>> options = { { "topLeftViewport", "Top Left (Viewport)" },
-                                                                              { "topRightViewport", "Top Right (Viewport)" },
-                                                                              { "bottomLeftViewport", "Bottom Left (Viewport)" },
-                                                                              { "bottomRightViewport", "Bottom Right (Viewport)" },
-                                                                              { "centerViewport", "Center (Viewport)" },
-                                                                              { "pieLeft", "Pie-Chart Left" },
-                                                                              { "pieRight", "Pie-Chart Right" },
-                                                                              { "topLeftScreen", "Top Left (Screen)" },
-                                                                              { "topRightScreen", "Top Right (Screen)" },
-                                                                              { "bottomLeftScreen", "Bottom Left (Screen)" },
-                                                                              { "bottomRightScreen", "Bottom Right (Screen)" },
-                                                                              { "centerScreen", "Center (Screen)" } };
+    static const std::vector<std::pair<const char*, const char*>> options = {
+                                                                                {"topLeftViewport", trc("position.top_left_viewport")},
+                                                                                {"topRightViewport", trc("position.top_right_viewport")},
+                                                                                {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+                                                                                {"bottomRightViewport", trc("position.bottom_right_viewport")},
+                                                                                {"centerViewport", trc("position.center_viewport")},
+                                                                                {"pieLeft", trc("position.pie_left")},
+                                                                                {"pieRight", trc("position.pie_right")},
+                                                                                {"topLeftScreen", trc("position.top_left_screen")},
+                                                                                {"topRightScreen", trc("position.top_right_screen")},
+                                                                                {"bottomLeftScreen", trc("position.bottom_left_screen")},
+                                                                                {"bottomRightScreen", trc("position.bottom_right_screen")},
+                                                                                {"centerScreen", trc("position.center_screen")}
+                                                                            };
     return options;
 }
 
 inline const std::vector<std::pair<const char*, const char*>>& GetImageRelativeToOptions() {
-    static const std::vector<std::pair<const char*, const char*>> options = { { "topLeft", "Top Left" },
-                                                                              { "topRight", "Top Right" },
-                                                                              { "bottomLeft", "Bottom Left" },
-                                                                              { "bottomRight", "Bottom Right" },
-                                                                              { "center", "Center" } };
+    static const std::vector<std::pair<const char*, const char*>> options = { { "topLeft", trc("position.top_left") },
+                                                                              { "topRight", trc("position.top_right") },
+                                                                              { "bottomLeft", trc("position.bottom_left") },
+                                                                              { "bottomRight", trc("position.bottom_right") },
+                                                                              { "center", trc("position.center") } };
     return options;
 }
 
