@@ -1,57 +1,51 @@
-if (ImGui::BeginTabItem("Inputs")) {
+if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
     if (ImGui::BeginTabBar("InputsSubTabs")) {
-        if (ImGui::BeginTabItem("Mouse")) {
+        if (ImGui::BeginTabItem(trc("inputs.mouse"))) {
             SliderCtrlClickTip();
 
-            ImGui::SeparatorText("Mouse Settings");
+            ImGui::SeparatorText(trc("inputs.mouse_settings"));
 
             RawInputSensitivityNote();
-            ImGui::Text("Mouse Sensitivity:");
+            ImGui::Text(trc("label.mouse_sensitivity"));
             ImGui::SetNextItemWidth(600);
             if (ImGui::SliderFloat("##mouseSensitivity", &g_config.mouseSensitivity, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
             ImGui::SameLine();
-            HelpMarker("Multiplies mouse movement for raw input events (mouselook).\n"
-                       "1.0 = normal sensitivity, higher = faster, lower = slower.\n"
-                       "Useful for adjusting mouse speed when using stretched resolutions.");
+            HelpMarker(trc("tooltip.mouse_sensitivity"));
 
-            ImGui::Text("Windows Mouse Speed:");
+            ImGui::Text(trc("label.windows_mouse_speed"));
             ImGui::SetNextItemWidth(600);
             int windowsSpeedValue = g_config.windowsMouseSpeed;
-            if (ImGui::SliderInt("##windowsMouseSpeed", &windowsSpeedValue, 0, 20, windowsSpeedValue == 0 ? "Disabled" : "%d")) {
+            if (ImGui::SliderInt("##windowsMouseSpeed", &windowsSpeedValue, 0, 20, windowsSpeedValue == 0 ? trc("label.disabled") : "%d")) {
                 g_config.windowsMouseSpeed = windowsSpeedValue;
                 g_configIsDirty = true;
             }
             ImGui::SameLine();
-            HelpMarker("Temporarily overrides Windows mouse speed setting while game is running.\n"
-                       "0 = Disabled (use system setting)\n"
-                       "1-20 = Override Windows mouse speed (10 = default Windows speed)\n"
-                       "Affects cursor movement in game menus. Original setting is restored on exit.");
+            HelpMarker(trc("tooltip.windows_mouse_speed"));
 
             if (g_gameVersion < GameVersion(1, 13, 0)) {
-                if (ImGui::Checkbox("Let Cursor Escape Window", &g_config.allowCursorEscape)) { g_configIsDirty = true; }
+                if (ImGui::Checkbox(trc("label.let_cursor_escape_window"), &g_config.allowCursorEscape)) { g_configIsDirty = true; }
                 ImGui::SameLine();
-                HelpMarker("For pre 1.13, prevents the cursor being locked to the game window when in fullscreen");
+                HelpMarker(trc("tooptip.let_cursor_escape_window"));
             }
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Cursor Configuration");
+            ImGui::SeparatorText(trc("inputs.cursor_configuration"));
 
-            if (ImGui::Checkbox("Enable Custom Cursors", &g_config.cursors.enabled)) {
+            if (ImGui::Checkbox(trc("inputs.enable_custom_cursors"), &g_config.cursors.enabled)) {
                 g_configIsDirty = true;
-                // Schedule cursor reload (will happen outside GUI rendering to avoid deadlock)
                 g_cursorsNeedReload = true;
             }
             ImGui::SameLine();
-            HelpMarker("When enabled, the mouse cursor will change based on the current game state.");
+            HelpMarker(trc("tooltip.cursor_change"));
 
             ImGui::Spacing();
 
             if (g_config.cursors.enabled) {
-                ImGui::Text("Configure cursors for different game states:");
+                ImGui::Text(trc("inputs.configure_cursors_for_different_game_states"));
                 ImGui::Spacing();
 
                 struct CursorOption {
@@ -80,11 +74,11 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                         std::string description;
                         if (cursorName.find("Cross") != std::string::npos) {
-                            description = "Crosshair cursor";
+                            description = tr("inputs.crosshair_cursor");
                         } else if (cursorName.find("Arrow") != std::string::npos) {
-                            description = "Arrow pointer cursor";
+                            description = tr("inputs.arrow_pointer_cursor");
                         } else {
-                            description = "Custom cursor";
+                            description = tr("inputs.custom_cursor");
                         }
 
                         availableCursors.push_back({ cursorName, displayName, description });
@@ -98,9 +92,9 @@ if (ImGui::BeginTabItem("Inputs")) {
                     CursorConfig* config;
                 };
 
-                CursorConfigUI cursors[] = { { "Title Screen", &g_config.cursors.title },
-                                             { "Wall", &g_config.cursors.wall },
-                                             { "In World", &g_config.cursors.ingame } };
+                CursorConfigUI cursors[] = { { trc("game_state.title"), &g_config.cursors.title },
+                                             { trc("game_state.wall"), &g_config.cursors.wall },
+                                             { trc("game_state.inworld_free"), &g_config.cursors.ingame } };
 
                 for (int i = 0; i < 3; ++i) {
                     auto& cursorUI = cursors[i];
@@ -119,7 +113,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
                     }
 
-                    ImGui::Text("Cursor:");
+                    ImGui::Text(trc("inputs.cursor"));
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
                     if (ImGui::BeginCombo("##cursor", currentCursorName)) {
@@ -167,7 +161,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     ImGui::SameLine();
                     ImGui::Spacing();
                     ImGui::SameLine();
-                    ImGui::Text("Size:");
+                    ImGui::Text(trc("inputs.cursor_size"));
                     ImGui::SameLine();
 
                     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.8f);
@@ -194,14 +188,14 @@ if (ImGui::BeginTabItem("Inputs")) {
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                if (ImGui::Button("Reset to Defaults##cursors")) { ImGui::OpenPopup("Reset Cursors to Defaults?"); }
+                if (ImGui::Button((tr("button.reset_defaults") + "##cursors").c_str())) { ImGui::OpenPopup(trc("inputs.reset_cursors_to_defaults")); }
 
-                if (ImGui::BeginPopupModal("Reset Cursors to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-                    ImGui::Text("This will reset all cursor settings to their default values.");
-                    ImGui::Text("This action cannot be undone.");
+                if (ImGui::BeginPopupModal(trc("inputs.reset_cursors_to_defaults"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), trc("label.warning"));
+                    ImGui::Text(trc("inputs.reset_cursors_to_defaults_tip"));
+                    ImGui::Text(trc("label.action_cannot_be_undone"));
                     ImGui::Separator();
-                    if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
+                    if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
                         g_config.cursors = GetDefaultCursors();
                         g_configIsDirty = true;
                         g_cursorsNeedReload = true;
@@ -209,7 +203,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     }
                     ImGui::SetItemDefaultFocus();
                     ImGui::SameLine();
-                    if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+                    if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
                     ImGui::EndPopup();
                 }
             }
@@ -217,72 +211,68 @@ if (ImGui::BeginTabItem("Inputs")) {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Keyboard")) {
+        if (ImGui::BeginTabItem(trc("inputs.keyboard"))) {
             SliderCtrlClickTip();
 
-            ImGui::SeparatorText("Key Repeat Rate");
+            ImGui::SeparatorText(trc("inputs.key_repeat_rate"));
 
-            ImGui::Text("Key Repeat Start Delay:");
+            ImGui::Text(trc("inputs.key_repeat_start_delay"));
             ImGui::SetNextItemWidth(600);
             int startDelayValue = g_config.keyRepeatStartDelay;
-            if (ImGui::SliderInt("##keyRepeatStartDelay", &startDelayValue, 0, 500, startDelayValue == 0 ? "Default" : "%d ms")) {
+            if (ImGui::SliderInt("##keyRepeatStartDelay", &startDelayValue, 0, 500, startDelayValue == 0 ? trc("label.default") : "%d ms")) {
                 g_config.keyRepeatStartDelay = startDelayValue;
                 g_configIsDirty = true;
                 ApplyKeyRepeatSettings();
             }
             ImGui::SameLine();
-            HelpMarker("Delay before a held key starts repeating.\n"
-                       "0 = Use Windows default, 1-500ms = custom delay.\n"
-                       "Only applied while the game window is focused.");
+            HelpMarker(trc("inputs.tooltip.key_repeat_start_delay"));
 
-            ImGui::Text("Key Repeat Delay:");
+            ImGui::Text(trc("inputs.key_repeat_delay"));
             ImGui::SetNextItemWidth(600);
             int repeatDelayValue = g_config.keyRepeatDelay;
-            if (ImGui::SliderInt("##keyRepeatDelay", &repeatDelayValue, 0, 500, repeatDelayValue == 0 ? "Default" : "%d ms")) {
+            if (ImGui::SliderInt("##keyRepeatDelay", &repeatDelayValue, 0, 500, repeatDelayValue == 0 ? trc("label.default") : "%d ms")) {
                 g_config.keyRepeatDelay = repeatDelayValue;
                 g_configIsDirty = true;
                 ApplyKeyRepeatSettings();
             }
             ImGui::SameLine();
-            HelpMarker("Time between repeated key presses while held.\n"
-                       "0 = Use Windows default, 1-500ms = custom delay.\n"
-                       "Only applied while the game window is focused.");
+            HelpMarker(trc("inputs.tooltip.key_repeat_delay"));
 
             ImGui::Spacing();
 
-            ImGui::SeparatorText("Key Rebinding");
-            ImGui::TextWrapped("Intercept keyboard inputs and remap them before they reach the game.");
+            ImGui::SeparatorText(trc("inputs.key_rebinding"));
+            ImGui::TextWrapped(trc("inputs.tooltip.key_rebinding"));
             ImGui::Spacing();
 
-            if (ImGui::Checkbox("Enable Key Rebinding", &g_config.keyRebinds.enabled)) {
+            if (ImGui::Checkbox(trc("inputs.enable_key_rebinding"), &g_config.keyRebinds.enabled)) {
                 g_configIsDirty = true;
                 std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
                 RebuildHotkeyMainKeys_Internal();
             }
             ImGui::SameLine();
-            HelpMarker("When enabled, configured key rebinds will intercept keyboard input and send the remapped key to the game instead.");
+            HelpMarker(trc("inputs.tooltip.enable_key_rebinding"));
 
-            if (ImGui::Checkbox("Resolve Rebind Targets For Hotkeys", &g_config.keyRebinds.resolveRebindTargetsForHotkeys)) {
+            if (ImGui::Checkbox(trc("inputs.resolve_rebind_targets_for_hotkeys"), &g_config.keyRebinds.resolveRebindTargetsForHotkeys)) {
                 g_configIsDirty = true;
             }
             ImGui::SameLine();
-            HelpMarker("When enabled, hotkeys can match the rebind target key for the pressed source key. Disable to only match the actual pressed key.");
+            HelpMarker(trc("inputs.tooltip.resolve_rebind_targets"));
 
             const ImVec4 rebindActiveGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
             const ImVec4 rebindDisabledRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
-            ImGui::TextDisabled("Status:");
+            ImGui::TextDisabled(trc("label.status"));
             ImGui::SameLine();
             ImGui::TextColored(g_config.keyRebinds.enabled ? rebindActiveGreen : rebindDisabledRed, "%s",
-                               g_config.keyRebinds.enabled ? "ACTIVE" : "DISABLED");
+                               g_config.keyRebinds.enabled ? trc("label.enabled") : trc("label.disabled"));
 
             if (g_config.keyRebinds.enabled) {
                 ImGui::Spacing();
-                ImGui::SeparatorText("Rebind Toggle Hotkey");
+                ImGui::SeparatorText(trc("inputs.rebind_toggle_hotkey"));
                 std::string rebindToggleHotkeyStr = GetKeyComboString(g_config.keyRebinds.toggleHotkey);
                 const bool isBindingRebindToggle = (s_mainHotkeyToBind == -995);
                 const char* rebindToggleHotkeyButtonLabel =
-                    isBindingRebindToggle ? "[Press Keys...]"
-                                          : (rebindToggleHotkeyStr.empty() ? "[Click to Bind]" : rebindToggleHotkeyStr.c_str());
+                    isBindingRebindToggle ? trc("hotkeys.press_keys")
+                                          : (rebindToggleHotkeyStr.empty() ? trc("hotkeys.click_to_bind") : rebindToggleHotkeyStr.c_str());
                 if (ImGui::Button(rebindToggleHotkeyButtonLabel, ImVec2(150, 0))) {
                     s_mainHotkeyToBind = -995;
                     s_altHotkeyToBind = { -1, -1 };
@@ -290,7 +280,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     MarkHotkeyBindingActive();
                 }
                 ImGui::SameLine();
-                HelpMarker("Toggles key rebinding ACTIVE/DISABLED at runtime.");
+                HelpMarker(trc("inputs.tooltip.rebind_toggle_hotkey"));
 
                 ImGui::Separator();
                 ImGui::Spacing();
@@ -464,13 +454,9 @@ if (ImGui::BeginTabItem("Inputs")) {
                     s_layoutEscapeRequiresRelease = false;
                 }
 
-                if (ImGui::Button("Open Keyboard Layout")) { s_keyboardLayoutOpen = true; }
+                if (ImGui::Button(trc("inputs.open_keyboard_layout"))) { s_keyboardLayoutOpen = true; }
                 ImGui::SameLine();
-                HelpMarker("Shows a visual keyboard. Keys with a configured rebind are outlined.\n"
-                           "Each key shows the output scan code (large text) and the game keybind hotkey below it.\n"
-                           "Physical key labels are hidden in this view.\n"
-                           "Right-click a key to configure rebinds.\n"
-                           "This is a visualization only.");
+                HelpMarker(trc("inputs.tooltip.open_keyboard_layout"));
 
                 if (s_keyboardLayoutOpen) {
                     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -486,13 +472,13 @@ if (ImGui::BeginTabItem("Inputs")) {
                 }
 
                 auto scanCodeToDisplayName = [&](DWORD scan, DWORD fallbackVk) -> std::string {
-                    if (scan == 0) {
-                        if (fallbackVk == VK_LBUTTON || fallbackVk == VK_RBUTTON || fallbackVk == VK_MBUTTON || fallbackVk == VK_XBUTTON1 ||
-                            fallbackVk == VK_XBUTTON2) {
-                            return VkToString(fallbackVk);
+                        if (scan == 0) {
+                            if (fallbackVk == VK_LBUTTON || fallbackVk == VK_RBUTTON || fallbackVk == VK_MBUTTON || fallbackVk == VK_XBUTTON1 ||
+                                fallbackVk == VK_XBUTTON2) {
+                                return VkToString(fallbackVk);
+                            }
+                            return std::string(tr("inputs.keyboard_layout_unbound"));
                         }
-                        return std::string("[Unbound]");
-                    }
 
                     const DWORD scanLow = (scan & 0xFF);
                     if (scanLow == 0x45) {
@@ -513,14 +499,14 @@ if (ImGui::BeginTabItem("Inputs")) {
                     if ((scan & 0xFF00) != 0) { keyNameLParam |= (1 << 24); }
                     char keyName[64] = {};
                     if (GetKeyNameTextA(keyNameLParam, keyName, sizeof(keyName)) > 0) { return std::string(keyName); }
-                    return std::string("[Unknown]");
+                    return std::string(tr("inputs.keyboard_layout_unknown"));
                 };
 
                 ImGui::SetNextWindowBgAlpha(1.0f);
                 if (s_keyboardLayoutOpen) {
                     ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(18, 19, 22, 255));
                     const bool keyboardLayoutWindowVisible =
-                        ImGui::Begin("Keyboard Layout", &s_keyboardLayoutOpen,
+                        ImGui::Begin(trc("inputs.keyboard_layout"), &s_keyboardLayoutOpen,
                                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoCollapse);
                     if (keyboardLayoutWindowVisible) {
                     MarkRebindBindingActive();
@@ -528,8 +514,8 @@ if (ImGui::BeginTabItem("Inputs")) {
                     bool layoutEscapeConsumedThisFrame = false;
 
                     const bool anyPopupOpenNow = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
-                    const bool contextPopupOpenNow = ImGui::IsPopupOpen("Rebind Config##layout") || ImGui::IsPopupOpen("Triggers Custom##layout") ||
-                                                     ImGui::IsPopupOpen("Custom Unicode##layout");
+                    const bool contextPopupOpenNow = ImGui::IsPopupOpen(trc("inputs.rebind_config")) || ImGui::IsPopupOpen(trc("inputs.triggers_custom")) ||
+                                                     ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
                     bool blockLayoutEscapeThisFrame = false;
                     if (escapePressedThisFrame && (anyPopupOpenNow || contextPopupOpenNow || s_layoutContextPopupWasOpenLastFrame)) {
                         s_layoutEscapeRequiresRelease = true;
@@ -544,17 +530,17 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                     {
                         float scalePct = s_keyboardLayoutScale * 100.0f;
-                        ImGui::TextUnformatted("Scale:");
+                        ImGui::TextUnformatted(trc("inputs.keyboard_layout_scale"));
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(220.0f);
                         if (ImGui::SliderFloat("##keyboardLayoutScalePct", &scalePct, 60.0f, 300.0f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
                             s_keyboardLayoutScale = scalePct / 100.0f;
                         }
                         ImGui::SameLine();
-                        HelpMarker("Visual scale for the keyboard layout preview only.");
+                        HelpMarker(trc("inputs.tooltip.keyboard_layout_scale"));
 
-                        ImGui::TextDisabled("Tip: Right-click a key to configure it.");
-                        ImGui::TextDisabled("Not all rebinds supported by Toolscreen are legal for speedrunning");
+                        ImGui::TextDisabled(trc("inputs.keyboard_layout_tip"));
+                        ImGui::TextDisabled(trc("label.not_all_rebinds_supported"));
 
                         ImGui::Spacing();
                         ImGui::Separator();
@@ -696,7 +682,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     static DWORD s_layoutContextVk = 0;
                     static int s_layoutContextPreferredIndex = -1;
 
-                    const ImGuiID rebindPopupId = ImGui::GetID("Rebind Config##layout");
+                    const ImGuiID rebindPopupId = ImGui::GetID(trc("inputs.rebind_config"));
                     auto openRebindContextFor = [&](DWORD vk) {
                         s_layoutContextVk = vk;
                         s_layoutContextPreferredIndex = -1;
@@ -764,7 +750,7 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                     auto typesValueForDisplay = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
                         if (!rb) return VkToString(originalVk);
-                        if (cannotTypeFor(rb, originalVk)) return "Cannot type";
+                        if (cannotTypeFor(rb, originalVk)) return tr("inputs.cannot_type");
                         if (rb->useCustomOutput && rb->customOutputUnicode != 0) return codepointToDisplay((uint32_t)rb->customOutputUnicode);
 
                         DWORD textVk = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : originalVk;
@@ -1061,11 +1047,11 @@ if (ImGui::BeginTabItem("Inputs")) {
                                     const std::string typesTip = typesValueForDisplay(rb, kc.vk);
                                     const std::string triggersTip =
                                         normalizeMouseButtonLabel(scanCodeToDisplayName(triggerScanTip, triggerVkTip));
-                                    ImGui::Text("Types: %s", typesTip.c_str());
-                                    ImGui::Text("Triggers: %s", triggersTip.c_str());
+                                    ImGui::Text(tr("inputs.types_format", typesTip.c_str()).c_str());
+                                    ImGui::Text(tr("inputs.triggers_format", triggersTip.c_str()).c_str());
                                 } else {
                                     ImGui::Text("%s (%u)", VkToString(kc.vk).c_str(), (unsigned)kc.vk);
-                                    ImGui::TextUnformatted("Right-click to configure rebinds.");
+                                    ImGui::TextUnformatted(trc("inputs.tooltip.right_click_to_configure"));
                                 }
                                 ImGui::EndTooltip();
                             }
@@ -1102,11 +1088,11 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 DWORD triggerScanTip = resolveTriggerScanFor(rb, vk);
                                 const std::string typesTip = typesValueForDisplay(rb, vk);
                                 const std::string triggersTip = normalizeMouseButtonLabel(scanCodeToDisplayName(triggerScanTip, triggerVkTip));
-                                ImGui::Text("Types: %s", typesTip.c_str());
-                                ImGui::Text("Triggers: %s", triggersTip.c_str());
+                                ImGui::Text(trc("inputs.types_format"), typesTip.c_str());
+                                ImGui::Text(trc("inputs.triggers_format"), triggersTip.c_str());
                             } else {
                                 ImGui::Text("%s (%u)", VkToString(vk).c_str(), (unsigned)vk);
-                                ImGui::TextUnformatted("Right-click to configure rebinds.");
+                                ImGui::TextUnformatted(trc("inputs.tooltip.right_click_to_configure"));
                             }
                             ImGui::EndTooltip();
                         }
@@ -1282,11 +1268,11 @@ if (ImGui::BeginTabItem("Inputs")) {
                     }
 
                     ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
-                    if (ImGui::BeginPopup("Rebind Config##layout")) {
+                    if (ImGui::BeginPopup(trc("inputs.rebind_config"))) {
                         // Also block global ESC-to-close-GUI while editing inside this popup.
                         MarkRebindBindingActive();
 
-                        const bool nestedLayoutPopupOpen = ImGui::IsPopupOpen("Triggers Custom##layout") || ImGui::IsPopupOpen("Custom Unicode##layout");
+                        const bool nestedLayoutPopupOpen = ImGui::IsPopupOpen(trc("inputs.triggers_custom")) || ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
                         if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !nestedLayoutPopupOpen) {
                             s_layoutEscapeRequiresRelease = true;
                             layoutEscapeConsumedThisFrame = true;
@@ -1496,10 +1482,10 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                         if (s_layoutUnicodeEditIndex != -1) {
                             MarkRebindBindingActive();
-                            ImGui::OpenPopup("Custom Unicode##layout");
+                            ImGui::OpenPopup(trc("inputs.custom_unicode"));
                         }
 
-                        if (ImGui::BeginPopupModal("Custom Unicode##layout", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+                        if (ImGui::BeginPopupModal(trc("inputs.custom_unicode"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
                             MarkRebindBindingActive();
                             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                                 s_layoutEscapeRequiresRelease = true;
@@ -1508,15 +1494,15 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 s_layoutUnicodeEditText.clear();
                                 ImGui::CloseCurrentPopup();
                             }
-                            ImGui::TextUnformatted("Enter a Unicode character or codepoint:");
-                            ImGui::TextDisabled("Examples: ø   U+00F8   0x00F8");
+                            ImGui::TextUnformatted(trc("inputs.tooltip.enter_unicode_or_codepoint"));
+                            ImGui::TextDisabled(trc("inputs.tooltip.unicode_examples"));
                             ImGui::Separator();
                             ImGui::SetNextItemWidth(260.0f);
-                            ImGui::InputTextWithHint("##unicode", "ø or U+00F8", &s_layoutUnicodeEditText);
+                            ImGui::InputTextWithHint("##unicode", trc("inputs.tooltip.unicode_hint"), &s_layoutUnicodeEditText);
                             ImGui::Spacing();
 
                             const bool canApply = true;
-                            if (ImGui::Button("Apply", ImVec2(120, 0)) && canApply) {
+                            if (ImGui::Button(trc("button.apply"), ImVec2(120, 0)) && canApply) {
                                 if (s_layoutUnicodeEditIndex >= 0 && s_layoutUnicodeEditIndex < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutUnicodeEditIndex];
                                     if (s_layoutUnicodeEditText.empty()) {
@@ -1546,7 +1532,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 ImGui::CloseCurrentPopup();
                             }
                             ImGui::SameLine();
-                            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                            if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) {
                                 if (s_layoutUnicodeEditIndex >= 0 && s_layoutUnicodeEditIndex < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutUnicodeEditIndex];
                                     int maybeErase = isNoOpRebindForKey(r, r.fromKey) ? s_layoutUnicodeEditIndex : -1;
@@ -1569,10 +1555,10 @@ if (ImGui::BeginTabItem("Inputs")) {
                         // Wider so key names like "RSHIFT" / "NUMLOCK" fit without truncation.
                         const float vBtnW = 138.0f;
 
-                        ImGui::TextUnformatted("Types:");
+                        ImGui::TextUnformatted(trc("inputs.types_label"));
                         ImGui::SameLine();
                         {
-                            std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVk) ? std::string("[Press key...]") : typesValue;
+                            std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVk) ? std::string(trc("hotkeys.press_keys")) : typesValue;
                             if (ImGui::Button((label + "##types").c_str(), ImVec2(vBtnW, 0))) {
                                 idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                 s_layoutContextPreferredIndex = idx;
@@ -1585,7 +1571,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                             }
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button("Custom##types_custom", ImVec2(112, 0))) {
+                        if (ImGui::Button((tr("label.custom") + "##types_custom").c_str(), ImVec2(112, 0))) {
                             idx = createRebindForKeyIfMissing(s_layoutContextVk);
                             s_layoutContextPreferredIndex = idx;
                             if (idx >= 0) {
@@ -1598,10 +1584,10 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                         ImGui::Spacing();
 
-                        ImGui::TextUnformatted("Triggers:");
+                        ImGui::TextUnformatted(trc("inputs.triggers_label"));
                         ImGui::SameLine();
                         {
-                            std::string label = (s_layoutBindTarget == LayoutBindTarget::TriggersVk) ? std::string("[Press key...]") : triggersValue;
+                            std::string label = (s_layoutBindTarget == LayoutBindTarget::TriggersVk) ? std::string(trc("hotkeys.press_keys")) : triggersValue;
                             if (ImGui::Button((label + "##triggers").c_str(), ImVec2(vBtnW, 0))) {
                                 idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                 s_layoutContextPreferredIndex = idx;
@@ -1619,11 +1605,11 @@ if (ImGui::BeginTabItem("Inputs")) {
                             idx = (idx >= 0) ? idx : findBestRebindIndexForKey(s_layoutContextVk);
                             KeyRebind* r = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
 
-                            if (ImGui::Button("Custom##triggers_scan_custom", ImVec2(82, 0))) {
-                                ImGui::OpenPopup("Triggers Custom##layout");
+                            if (ImGui::Button((tr("label.custom") + "##triggers_scan_custom").c_str(), ImVec2(82, 0))) {
+                                ImGui::OpenPopup(trc("inputs.triggers_custom"));
                             }
 
-                            if (ImGui::BeginPopup("Triggers Custom##layout")) {
+                            if (ImGui::BeginPopup(trc("inputs.triggers_custom"))) {
                                 MarkRebindBindingActive();
                                 if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                                     s_layoutEscapeRequiresRelease = true;
@@ -1637,11 +1623,11 @@ if (ImGui::BeginTabItem("Inputs")) {
                                                                                                           : getScanCodeWithExtendedFlag(curTriggerVk);
                                 std::string preview = scanCodeToDisplayName(curScan, curTriggerVk);
 
-                                ImGui::Text("Current: %s", preview.c_str());
+                                ImGui::Text(tr("inputs.current_format", preview.c_str()).c_str());
                                 ImGui::Separator();
 
                                 bool isDefault = !(r && r->useCustomOutput && r->customOutputScanCode != 0);
-                                if (ImGui::Selectable("Default", isDefault)) {
+                                if (ImGui::Selectable(trc("label.default"), isDefault)) {
                                     idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                     s_layoutContextPreferredIndex = idx;
                                     if (idx >= 0) {
@@ -1680,12 +1666,12 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
 
                         if (cannotTypeFor(rbPtr, s_layoutContextVk)) {
-                            ImGui::TextDisabled("Cannot type");
+                            ImGui::TextDisabled(trc("inputs.cannot_type"));
                         }
 
                         ImGui::Spacing();
 
-                        if (ImGui::Button("Reset##layout_reset", ImVec2(170, 0))) {
+                        if (ImGui::Button((tr("button.reset_defaults") + "##layout_reset").c_str(), ImVec2(170, 0))) {
                             if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
                                 auto& r = g_config.keyRebinds.rebinds[idx];
                                 r.toKey = r.fromKey;
@@ -1716,7 +1702,7 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                     {
                         ImGui::Spacing();
-                        ImGui::SeparatorText("Rebinds");
+                        ImGui::SeparatorText(trc("inputs.rebinds"));
                         bool anyShown = false;
                         auto isNoOp = [&](const KeyRebind& r) -> bool {
                             if (r.fromKey == 0 || r.toKey == 0) return true;
@@ -1740,7 +1726,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                             anyShown = true;
                         }
                         if (!anyShown) {
-                            ImGui::TextDisabled("(No active rebinds)");
+                            ImGui::TextDisabled(trc("inputs.no_active_rebinds"));
                         }
                     }
 
@@ -1750,8 +1736,8 @@ if (ImGui::BeginTabItem("Inputs")) {
                     const bool anyRebindBindUiActiveAfter = (s_rebindFromKeyToBind != -1) || (s_rebindOutputVKToBind != -1) ||
                                                             (s_rebindTextOverrideVKToBind != -1) || (s_rebindOutputScanToBind != -1) ||
                                                             (s_layoutBindTarget != LayoutBindTarget::None) || (s_layoutUnicodeEditIndex != -1) ||
-                                                            ImGui::IsPopupOpen("Rebind Config##layout") || ImGui::IsPopupOpen("Triggers Custom##layout") ||
-                                                            ImGui::IsPopupOpen("Custom Unicode##layout");
+                                                            ImGui::IsPopupOpen(trc("inputs.rebind_config")) || ImGui::IsPopupOpen(trc("inputs.triggers_custom")) ||
+                                                            ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
                     if (!blockLayoutEscapeThisFrame && !layoutEscapeConsumedThisFrame && escapePressedThisFrame && !anyRebindBindUiActiveAfter) {
                         s_keyboardLayoutOpen = false;
                     }
@@ -1768,11 +1754,11 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                 bool is_rebind_from_binding = (s_rebindFromKeyToBind != -1);
                 if (is_rebind_from_binding) { MarkRebindBindingActive(); }
-                if (is_rebind_from_binding) { ImGui::OpenPopup("Bind From Key"); }
+                if (is_rebind_from_binding) { ImGui::OpenPopup(trc("inputs.bind_from_key")); }
 
-                if (ImGui::BeginPopupModal("Bind From Key", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-                    ImGui::Text("Press a key to bind as INPUT.");
-                    ImGui::Text("Press ESC to cancel.");
+                if (ImGui::BeginPopupModal(trc("inputs.bind_from_key"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+                    ImGui::Text(trc("inputs.bind_from_key.tooltip.prompt"));
+                    ImGui::Text(trc("inputs.bind_from_key.tooltip.cancel"));
                     ImGui::Separator();
 
                     static uint64_t s_lastBindingInputSeqInputs1 = 0;
@@ -1807,11 +1793,11 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                 bool is_vk_binding = (s_rebindOutputVKToBind != -1);
                 if (is_vk_binding) { MarkRebindBindingActive(); }
-                if (is_vk_binding) { ImGui::OpenPopup("Bind Output VK"); }
+                if (is_vk_binding) { ImGui::OpenPopup(trc("inputs.bind_output_vk")); }
 
-                if (ImGui::BeginPopupModal("Bind Output VK", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-                    ImGui::Text("Press a key to set OUTPUT Virtual Key Code.");
-                    ImGui::Text("Press ESC to cancel.");
+                if (ImGui::BeginPopupModal(trc("inputs.bind_output_vk"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+                    ImGui::Text(trc("inputs.bind_output_vk.tooltip.prompt"));
+                    ImGui::Text(trc("inputs.bind_output_vk.tooltip.cancel"));
                     ImGui::Separator();
 
                     static uint64_t s_lastBindingInputSeqInputs2 = 0;
@@ -1845,12 +1831,12 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                 bool is_text_vk_binding = (s_rebindTextOverrideVKToBind != -1);
                 if (is_text_vk_binding) { MarkRebindBindingActive(); }
-                if (is_text_vk_binding) { ImGui::OpenPopup("Bind Text Override VK"); }
+                if (is_text_vk_binding) { ImGui::OpenPopup(trc("inputs.bind_text_override_vk")); }
 
-                if (ImGui::BeginPopupModal("Bind Text Override VK", NULL,
+                if (ImGui::BeginPopupModal(trc("inputs.bind_text_override_vk"), NULL,
                                            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-                    ImGui::Text("Press a key to set TEXT OVERRIDE Virtual Key Code.");
-                    ImGui::Text("Press ESC to cancel.");
+                    ImGui::Text(trc("inputs.bind_text_override_vk.tooltip.prompt"));
+                    ImGui::Text(trc("inputs.bind_text_override_vk.tooltip.cancel"));
                     ImGui::Separator();
 
                     static uint64_t s_lastBindingInputSeqInputs2b = 0;
@@ -1885,11 +1871,11 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                 bool is_scan_binding = (s_rebindOutputScanToBind != -1);
                 if (is_scan_binding) { MarkRebindBindingActive(); }
-                if (is_scan_binding) { ImGui::OpenPopup("Bind Output Scan"); }
+                if (is_scan_binding) { ImGui::OpenPopup(trc("inputs.bind_output_scan")); }
 
-                if (ImGui::BeginPopupModal("Bind Output Scan", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-                    ImGui::Text("Press a key to set OUTPUT Scan Code.");
-                    ImGui::Text("Press ESC to cancel.");
+                if (ImGui::BeginPopupModal(trc("inputs.bind_output_scan"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+                    ImGui::Text(trc("inputs.bind_output_scan.tooltip.prompt"));
+                    ImGui::Text(trc("inputs.bind_output_scan.tooltip.cancel"));
                     ImGui::Separator();
 
                     static uint64_t s_lastBindingInputSeqInputs3 = 0;
@@ -1941,7 +1927,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                 }
 
                 ImGui::Spacing();
-                ImGui::TextDisabled("Configure key rebinds in the Keyboard Layout window (right-click keys). ");
+                ImGui::TextDisabled(trc("inputs.tooltip.configure_key_rebinds"));
             }
 
             ImGui::EndTabItem();

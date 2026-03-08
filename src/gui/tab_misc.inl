@@ -1,20 +1,19 @@
-if (ImGui::BeginTabItem("Misc")) {
+if (ImGui::BeginTabItem(trc("tabs.misc"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
-    ImGui::SeparatorText("About");
+    ImGui::SeparatorText(trc("label.about"));
 
-    // Static flag for license popup
     static bool s_showLicensesPopup = false;
 
-    if (ImGui::Button("Open-Source Licenses")) { s_showLicensesPopup = true; }
+    if (ImGui::Button(trc("button.licenses"))) { s_showLicensesPopup = true; }
     ImGui::SameLine();
-    HelpMarker("View license information for open-source libraries used in this project.");
+    HelpMarker(trc("tooltip.view_licenses"));
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Toolscreen");
-    if (ImGui::Button("Open Config Folder")) {
+    ImGui::SeparatorText(trc("label.toolscreen"));
+    if (ImGui::Button(trc("button.open_config"))) {
         if (g_toolscreenPath.empty()) {
             Log("ERROR: Unable to open config folder because toolscreen path is empty.");
         } else {
@@ -26,16 +25,16 @@ if (ImGui::BeginTabItem("Misc")) {
         }
     }
     ImGui::SameLine();
-    HelpMarker("Open the Toolscreen folder that contains config.toml.");
+    HelpMarker(trc("tooltip.open_config_folder"));
 
     // License popup modal
-    if (s_showLicensesPopup) { ImGui::OpenPopup("Open-Source Licenses"); }
+    if (s_showLicensesPopup) { ImGui::OpenPopup(trc("popup.licenses")); }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_Appearing);
 
-    if (ImGui::BeginPopupModal("Open-Source Licenses", &s_showLicensesPopup, ImGuiWindowFlags_NoResize)) {
+    if (ImGui::BeginPopupModal(trc("popup.licenses"), &s_showLicensesPopup, ImGuiWindowFlags_NoResize)) {
         ImGui::TextWrapped("This software uses the following open-source libraries:");
         ImGui::Spacing();
         ImGui::Separator();
@@ -163,7 +162,7 @@ if (ImGui::BeginTabItem("Misc")) {
 
         float buttonWidth = 120.0f;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) / 2.0f);
-        if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+        if (ImGui::Button(trc("button.close"), ImVec2(buttonWidth, 0))) {
             s_showLicensesPopup = false;
             ImGui::CloseCurrentPopup();
         }

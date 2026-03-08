@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem("Window Overlays")) {
+if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
 
@@ -13,22 +13,22 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
         std::string delete_overlay_label = "X##delete_overlay_" + std::to_string(i);
         if (ImGui::Button(delete_overlay_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
-            std::string overlay_popup_id = "Delete Window Overlay?##" + std::to_string(i);
+            std::string overlay_popup_id = (tr("window.overlays_delete") + "##" + std::to_string(i));
             ImGui::OpenPopup(overlay_popup_id.c_str());
         }
 
-        std::string overlay_popup_id = "Delete Window Overlay?##" + std::to_string(i);
+        std::string overlay_popup_id = (tr("window.overlays_delete") + "##" + std::to_string(i));
         if (ImGui::BeginPopupModal(overlay_popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Are you sure you want to delete window overlay '%s'?\nThis cannot be undone.", overlay.name.c_str());
+            ImGui::Text(trc("window.tooltip_delete", overlay.name));
             ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0))) {
+            if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 windowOverlay_to_remove = (int)i;
                 g_configIsDirty = true;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SetItemDefaultFocus();
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
 
@@ -47,7 +47,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                 ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
             }
 
-            if (ImGui::InputText("Name", &overlay.name)) {
+            if (ImGui::InputText(trc("window.overlays_name"), &overlay.name)) {
                 if (!HasDuplicateWindowOverlayName(overlay.name, i)) {
                     g_configIsDirty = true;
                     if (oldOverlayName != overlay.name) {
@@ -66,19 +66,19 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
             if (hasDuplicate) {
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Name already exists!");
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), trc("images.name_duplicate"));
             }
 
             // Dropdown for selecting from currently open windows
             ImGui::Separator();
-            ImGui::Text("Select Window:");
+            ImGui::Text(trc("window.overlays_select_window"));
 
             // Get cached window list from background thread (non-blocking)
             auto s_cachedWindows = GetCachedWindowList();
 
             ImGui::PushID(("window_dropdown_" + std::to_string(i)).c_str());
 
-            std::string dropdownPreview = "Choose Window...";
+            std::string dropdownPreview = trc("window.overlays_choose_window");
             if (!overlay.windowTitle.empty()) {
                 WindowInfo currentInfo;
                 currentInfo.title = overlay.windowTitle;
@@ -90,8 +90,8 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
             if (ImGui::BeginCombo("##WindowSelector", dropdownPreview.c_str())) {
                 if (s_cachedWindows.empty()) {
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No suitable windows found.");
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "WIndow capture thread may not be running.");
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), trc("window.overlays_not_found"));
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), trc("window.overlays_thread_exit"));
                 } else {
                     for (const auto& windowInfo : s_cachedWindows) {
                         bool isSelected = (overlay.windowTitle == windowInfo.title && overlay.windowClass == windowInfo.className &&
@@ -121,16 +121,14 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             }
             ImGui::PopID();
 
-            ImGui::Text("Window Match Priority");
+            ImGui::Text(trc("window.overlays_match_priority"));
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(?)");
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Window title must match: Only captures windows with exact matching title\n"
-                                  "Match title, otherwise find window of same executable: Prefers matching title, falls "
-                                  "back to same executable (e.g chrome.exe)");
+                ImGui::SetTooltip(trc("window.tooltip_match_priority"));
             }
 
-            const char* priorityOptions[] = { "Window title must match", "Match title, otherwise find window of same executable" };
+            const char* priorityOptions[] = { trc("window.overlays_match_priority_title"), trc("window.overlays_match_priority_title_executable") };
             const char* priorityValues[] = { "title", "title_executable" };
 
             int currentPriorityIdx = 0;
@@ -149,25 +147,25 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                 QueueOverlayReload(overlay.name, overlay);
             }
             ImGui::PopItemWidth();
-            ImGui::SeparatorText("Rendering");
-            if (ImGui::SliderFloat("Opacity", &overlay.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
-            if (ImGui::Checkbox("Pixelated Scaling", &overlay.pixelatedScaling)) g_configIsDirty = true;
-            if (ImGui::Checkbox("Only on my screen", &overlay.onlyOnMyScreen)) g_configIsDirty = true;
+            ImGui::SeparatorText(trc("window.overlays_rendering"));
+            if (ImGui::SliderFloat(trc("label.opacity"), &overlay.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
+            if (ImGui::Checkbox(trc("window.overlays_pixelated_scaling"), &overlay.pixelatedScaling)) g_configIsDirty = true;
+            if (ImGui::Checkbox(trc("window.overlays_only_on_my_screen"), &overlay.onlyOnMyScreen)) g_configIsDirty = true;
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, this window overlay will only be visible to you and not captured by OBS");
+                ImGui::SetTooltip(trc("window.tooltip.only_on_my_screen"));
             }
 
             ImGui::Columns(2, "overlay_render", false);
             ImGui::SetColumnWidth(0, 120);
-            ImGui::Text("X");
+            ImGui::Text(trc("label.x"));
             ImGui::NextColumn();
             if (Spinner("##overlay_x", &overlay.x)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Y");
+            ImGui::Text(trc("label.y"));
             ImGui::NextColumn();
             if (Spinner("##overlay_y", &overlay.y)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Scale");
+            ImGui::Text(trc("label.scale"));
             ImGui::NextColumn();
             float scalePercent = overlay.scale * 100.0f;
             ImGui::SetNextItemWidth(250);
@@ -176,7 +174,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                 g_configIsDirty = true;
             }
             ImGui::NextColumn();
-            ImGui::Text("Relative To");
+            ImGui::Text(trc("label.relative_to"));
             ImGui::NextColumn();
             const char* current_rel_to = getFriendlyName(overlay.relativeTo, imageRelativeToOptions);
             ImGui::SetNextItemWidth(150);
@@ -191,31 +189,31 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             }
             ImGui::Columns(1);
 
-            ImGui::SeparatorText("Cropping (from source window, in pixels)");
+            ImGui::SeparatorText(trc("window.overlays_cropping"));
             ImGui::Columns(2, "overlay_crop", false);
             ImGui::SetColumnWidth(0, 120);
-            ImGui::Text("Crop Top");
+            ImGui::Text(trc("window.overlays_crop_top"));
             ImGui::NextColumn();
             if (Spinner("##overlay_crop_t", &overlay.crop_top, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Crop Bottom");
+            ImGui::Text(trc("window.overlays_crop_bottom"));
             ImGui::NextColumn();
             if (Spinner("##overlay_crop_b", &overlay.crop_bottom, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Crop Left");
+            ImGui::Text(trc("window.overlays_crop_left"));
             ImGui::NextColumn();
             if (Spinner("##overlay_crop_l", &overlay.crop_left, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Crop Right");
+            ImGui::Text(trc("window.overlays_crop_right"));
             ImGui::NextColumn();
             if (Spinner("##overlay_crop_r", &overlay.crop_right, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
             ImGui::Columns(1);
 
-            ImGui::SeparatorText("Capture Settings");
+            ImGui::SeparatorText(trc("window.overlays_capture_settings"));
             ImGui::Columns(2, "overlay_capture", false);
             ImGui::SetColumnWidth(0, 150);
-            ImGui::Text("FPS");
+            ImGui::Text(trc("label.fps"));
             ImGui::NextColumn();
             ImGui::SetNextItemWidth(250);
             if (ImGui::SliderInt("##fps", &overlay.fps, 1, 60, "%d fps")) {
@@ -224,7 +222,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             }
             ImGui::NextColumn();
 
-            ImGui::Text("Search Interval");
+            ImGui::Text(trc("window.overlays_search_interval"));
             ImGui::NextColumn();
             float searchIntervalSeconds = overlay.searchInterval / 1000.0f;
             ImGui::SetNextItemWidth(250);
@@ -237,11 +235,10 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             ImGui::Columns(1);
 
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("How often to search for the window if it's not found (in seconds).\nLower values find "
-                                  "windows faster but use more CPU.\nRecommended: 1.0s (1 second)");
+                ImGui::SetTooltip(trc("tooltip.capture_search_interval"));
             }
 
-            ImGui::Text("Capture Method");
+            ImGui::Text(trc("window.overlays_capture_method"));
             const char* captureMethods[] = { "Windows 10+", "BitBlt" };
             int currentMethodIdx = 0;
             for (int i = 0; i < 2; i++) {
@@ -259,37 +256,29 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             }
             ImGui::PopItemWidth();
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Windows 10+: Captures most windows (recommended)\n"
-                                  "  - Similar to the \"Windows 10\" capture mode in OBS\n"
-                                  "\n"
-                                  "BitBlt: Captures from window device context, less performant\n"
-                                  "  - Only recommended if Windows 10+ method doesn't work\n");
+                ImGui::SetTooltip(trc("tooltip.capture_methond"));
             }
 
-            if (ImGui::Checkbox("Force Update", &overlay.forceUpdate)) g_configIsDirty = true;
+            if (ImGui::Checkbox(trc("window.overlays_force_update"), &overlay.forceUpdate)) g_configIsDirty = true;
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, Toolscreen sends redraw messages to the target window\n"
-                                  "on every capture frame (RedrawWindow + WM_PAINT + WM_CAPTURECHANGED).\n"
-                                  "Useful for windows that stop updating while in the background.");
+                ImGui::SetTooltip(trc("window.overlays_tooltip_force_update"));
             }
 
-            ImGui::SeparatorText("Interaction");
-            if (ImGui::Checkbox("Enable Interaction", &overlay.enableInteraction)) g_configIsDirty = true;
+            ImGui::SeparatorText(trc("window.overlays_interaction"));
+            if (ImGui::Checkbox(trc("window.overlays_enable_interaction"), &overlay.enableInteraction)) g_configIsDirty = true;
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, clicking on this overlay while the cursor is visible\n"
-                                  "will focus it and forward mouse/keyboard inputs to the real window.\n"
-                                  "Click outside the overlay or press Escape to unfocus.");
+                ImGui::SetTooltip(trc("tooltip.capture_interaction"));
             }
 
-            ImGui::SeparatorText("Background");
-            if (ImGui::Checkbox("Enable Background", &overlay.background.enabled)) g_configIsDirty = true;
+            ImGui::SeparatorText(trc("window.overlays_background"));
+            if (ImGui::Checkbox(trc("window.overlays_enable_background"), &overlay.background.enabled)) g_configIsDirty = true;
             ImGui::BeginDisabled(!overlay.background.enabled);
-            if (ImGui::ColorEdit3("BG Color", &overlay.background.color.r)) g_configIsDirty = true;
-            if (ImGui::SliderFloat("BG Opacity", &overlay.background.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
+            if (ImGui::ColorEdit3(trc("window.overlays_bg_color"), &overlay.background.color.r)) g_configIsDirty = true;
+            if (ImGui::SliderFloat(trc("window.overlays_bg_Opacity"), &overlay.background.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
             ImGui::EndDisabled();
 
-            ImGui::SeparatorText("Color Keying");
-            if (ImGui::Checkbox("Enable Color Key", &overlay.enableColorKey)) g_configIsDirty = true;
+            ImGui::SeparatorText(trc("window.overlays_color_keying"));
+            if (ImGui::Checkbox(trc("window.overlays_enable_color_keying"), &overlay.enableColorKey)) g_configIsDirty = true;
             ImGui::BeginDisabled(!overlay.enableColorKey);
 
             int colorKeyToRemove = -1;
@@ -317,7 +306,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             }
 
             ImGui::BeginDisabled(overlay.colorKeys.size() >= ConfigDefaults::MAX_COLOR_KEYS);
-            if (ImGui::Button("+ Add Color Key")) {
+            if (ImGui::Button(trc("window.overlays_add_color_key"))) {
                 ColorKeyConfig newKey;
                 newKey.color = { 0.0f, 0.0f, 0.0f };
                 newKey.sensitivity = 0.05f;
@@ -328,30 +317,30 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
             ImGui::EndDisabled();
 
-            ImGui::SeparatorText("Border");
-            if (ImGui::Checkbox("Enable Border##WindowOverlay", &overlay.border.enabled)) { g_configIsDirty = true; }
+            ImGui::SeparatorText(trc("window.overlays_border"));
+            if (ImGui::Checkbox((tr("window.overlays_enable_border") + "##WindowOverlay").c_str(), &overlay.border.enabled)) { g_configIsDirty = true; }
             ImGui::SameLine();
-            HelpMarker("Draw a border around the window overlay.");
+            HelpMarker(trc("window.overlays_tooltip_border"));
 
             if (overlay.border.enabled) {
-                ImGui::Text("Color:");
+                ImGui::Text(trc("images.border_color"));
                 ImVec4 borderCol = ImVec4(overlay.border.color.r, overlay.border.color.g, overlay.border.color.b, 1.0f);
                 if (ImGui::ColorEdit3("##BorderColorWindowOverlay", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
                     overlay.border.color = { borderCol.x, borderCol.y, borderCol.z };
                     g_configIsDirty = true;
                 }
 
-                ImGui::Text("Width:");
+                ImGui::Text(trc("images.border_width"));
                 ImGui::SetNextItemWidth(100);
                 if (Spinner("##BorderWidthWindowOverlay", &overlay.border.width, 1, 1, 50)) { g_configIsDirty = true; }
                 ImGui::SameLine();
-                ImGui::TextDisabled("px");
+                ImGui::TextDisabled(trc("label.px"));
 
-                ImGui::Text("Corner Radius:");
+                ImGui::Text(trc("images.border_radius"));
                 ImGui::SetNextItemWidth(100);
                 if (Spinner("##BorderRadiusWindowOverlay", &overlay.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
                 ImGui::SameLine();
-                ImGui::TextDisabled("px");
+                ImGui::TextDisabled(trc("label.px"));
             }
 
             ImGui::TreePop();
@@ -373,9 +362,9 @@ if (ImGui::BeginTabItem("Window Overlays")) {
         g_configIsDirty = true;
     }
     ImGui::Separator();
-    if (ImGui::Button("Add New Window Overlay")) {
+    if (ImGui::Button(trc("button.add_overlay"))) {
         WindowOverlayConfig newOverlay;
-        newOverlay.name = "New Window Overlay " + std::to_string(g_config.windowOverlays.size() + 1);
+        newOverlay.name = tr("window.overlays_new_window_overlay") + " " + std::to_string(g_config.windowOverlays.size() + 1);
         newOverlay.relativeTo = "centerViewport";
         g_config.windowOverlays.push_back(newOverlay);
         g_configIsDirty = true;
@@ -394,14 +383,14 @@ if (ImGui::BeginTabItem("Window Overlays")) {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Reset to Defaults##windowoverlays")) { ImGui::OpenPopup("Reset Window Overlays to Defaults?"); }
+    if (ImGui::Button((tr("button.reset_defaults") + "##windowoverlays").c_str())) { ImGui::OpenPopup(trc("window.overlays_reset_to_defaults")); }
 
-    if (ImGui::BeginPopupModal("Reset Window Overlays to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-        ImGui::Text("This will delete ALL window overlays.");
-        ImGui::Text("This action cannot be undone.");
+    if (ImGui::BeginPopupModal(trc("window.overlays_reset_to_defaults"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), trc("label.warning"));
+        ImGui::Text(trc("window.overlays_warning_reset_to_defaults"));
+        ImGui::Text(trc("label.action_cannot_be_undone"));
         ImGui::Separator();
-        if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
+        if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
             for (const auto& overlay : g_config.windowOverlays) { RemoveWindowOverlayFromCache(overlay.name); }
             g_config.windowOverlays = GetDefaultWindowOverlays();
             g_configIsDirty = true;
@@ -409,7 +398,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
         }
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
 

@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem("Images")) {
+if (ImGui::BeginTabItem(trc("tabs.images"))) {
     g_currentlyEditingMirror = "";
 
     g_imageDragMode.store(true);
@@ -7,7 +7,7 @@ if (ImGui::BeginTabItem("Images")) {
     SliderCtrlClickTip();
 
     ImGui::TextColored(ImVec4(0.7f, 0.9f, 0.7f, 1.0f),
-                       "You can click and drag images in the game window to move them while this tab is open");
+                       trc("images.tooltip"));
     ImGui::Separator();
 
     int image_to_remove = -1;
@@ -22,17 +22,17 @@ if (ImGui::BeginTabItem("Images")) {
         }
 
         // Popup modal outside of node_open block so it can be displayed even when collapsed
-        std::string img_popup_id = "Delete Image?##" + std::to_string(i);
+        std::string img_popup_id = (tr("images.delete_images") + "##" + std::to_string(i));
         if (ImGui::BeginPopupModal(img_popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Are you sure you want to delete image '%s'?", img.name.c_str());
+            ImGui::Text(tr("images.delete_images_confirm", img.name.c_str()).c_str());
             ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0))) {
+            if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 image_to_remove = (int)i;
                 g_configIsDirty = true;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
 
@@ -51,7 +51,7 @@ if (ImGui::BeginTabItem("Images")) {
                 ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
             }
 
-            if (ImGui::InputText("Name", &img.name)) {
+            if (ImGui::InputText(trc("images.name"), &img.name)) {
                 if (!HasDuplicateImageName(img.name, i)) {
                     g_configIsDirty = true;
                     if (oldImageName != img.name) {
@@ -70,16 +70,16 @@ if (ImGui::BeginTabItem("Images")) {
 
             if (hasDuplicate) {
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Name already exists!");
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), trc("images.name_duplicate"));
             }
 
             std::string imgErrorKey = "img_" + img.name;
-            if (ImGui::InputText("Path", &img.path)) {
+            if (ImGui::InputText(trc("images.path"), &img.path)) {
                 ClearImageError(imgErrorKey);
                 g_configIsDirty = true;
             }
             ImGui::SameLine();
-            if (ImGui::Button(("Browse...##img_" + img.name).c_str())) {
+            if (ImGui::Button((tr("button.browse") + "##img_" + img.name).c_str())) {
                 ImagePickerResult result = OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
 
                 if (result.completed) {
@@ -94,7 +94,7 @@ if (ImGui::BeginTabItem("Images")) {
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button(("Validate##img_val_" + img.name).c_str())) {
+            if (ImGui::Button((tr("button.validate") + "##img_val_" + img.name).c_str())) {
                 std::string error = ValidateImageFile(img.path, g_toolscreenPath);
                 if (error.empty()) {
                     ClearImageError(imgErrorKey);
@@ -107,26 +107,26 @@ if (ImGui::BeginTabItem("Images")) {
             std::string imgError = GetImageError(imgErrorKey);
             if (!imgError.empty()) { ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", imgError.c_str()); }
 
-            ImGui::SeparatorText("Rendering");
+            ImGui::SeparatorText(trc("images.rendering"));
             ;
-            if (ImGui::SliderFloat("Opacity", &img.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
-            if (ImGui::Checkbox("Pixelated Scaling", &img.pixelatedScaling)) g_configIsDirty = true;
-            if (ImGui::Checkbox("Only on my screen", &img.onlyOnMyScreen)) g_configIsDirty = true;
+            if (ImGui::SliderFloat(trc("label.opacity"), &img.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
+            if (ImGui::Checkbox(trc("images.pixelated_scaling"), &img.pixelatedScaling)) g_configIsDirty = true;
+            if (ImGui::Checkbox(trc("images.only_on_my_screen"), &img.onlyOnMyScreen)) g_configIsDirty = true;
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, this image will only be visible to you and not captured by OBS");
+                ImGui::SetTooltip(trc("tooltip.only_on_my_screen"));
             }
 
             ImGui::Columns(2, "img_render", false);
             ImGui::SetColumnWidth(0, 120);
-            ImGui::Text("X");
+            ImGui::Text(trc("label.x"));
             ImGui::NextColumn();
             if (Spinner("##img_x", &img.x)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Y");
+            ImGui::Text(trc("label.y"));
             ImGui::NextColumn();
             if (Spinner("##img_y", &img.y)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Scale");
+            ImGui::Text(trc("label.scale"));
             ImGui::NextColumn();
             float scalePercent = img.scale * 100.0f;
             ImGui::SetNextItemWidth(250);
@@ -135,7 +135,7 @@ if (ImGui::BeginTabItem("Images")) {
                 g_configIsDirty = true;
             }
             ImGui::NextColumn();
-            ImGui::Text("Relative To");
+            ImGui::Text(trc("label.relative_to"));
             ImGui::NextColumn();
             const char* current_rel_to = getFriendlyName(img.relativeTo, imageRelativeToOptions);
             ImGui::SetNextItemWidth(150);
@@ -150,36 +150,36 @@ if (ImGui::BeginTabItem("Images")) {
             }
             ImGui::Columns(1);
 
-            ImGui::SeparatorText("Cropping (from source image, in pixels)");
+            ImGui::SeparatorText(trc("images.cropping"));
             ImGui::Columns(2, "img_crop", false);
             ImGui::SetColumnWidth(0, 120);
-            ImGui::Text("Crop Top");
+            ImGui::Text(trc("images.crop_top"));
             ImGui::NextColumn();
             if (Spinner("##img_crop_t", &img.crop_top, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Crop Bottom");
+            ImGui::Text(trc("images.crop_bottom"));
             ImGui::NextColumn();
             if (Spinner("##img_crop_b", &img.crop_bottom, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Crop Left");
+            ImGui::Text(trc("images.crop_left"));
             ImGui::NextColumn();
             if (Spinner("##img_crop_l", &img.crop_left, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text("Crop Right");
+            ImGui::Text(trc("images.crop_right"));
             ImGui::NextColumn();
             if (Spinner("##img_crop_r", &img.crop_right, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
             ImGui::Columns(1);
 
-            ImGui::SeparatorText("Background");
-            if (ImGui::Checkbox("Enable Background", &img.background.enabled)) g_configIsDirty = true;
+            ImGui::SeparatorText(trc("images.background"));
+            if (ImGui::Checkbox(trc("images.enable_background"), &img.background.enabled)) g_configIsDirty = true;
             ImGui::BeginDisabled(!img.background.enabled);
-            if (ImGui::ColorEdit3("BG Color", &img.background.color.r)) g_configIsDirty = true;
-            if (ImGui::SliderFloat("BG Opacity", &img.background.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
+            if (ImGui::ColorEdit3(trc("images.bg_color"), &img.background.color.r)) g_configIsDirty = true;
+            if (ImGui::SliderFloat(trc("images.bg_opacity"), &img.background.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
             ImGui::EndDisabled();
 
-            ImGui::SeparatorText("Color Keying");
-            if (ImGui::Checkbox("Enable Color Key", &img.enableColorKey)) g_configIsDirty = true;
+            ImGui::SeparatorText(trc("images.color_keying"));
+            if (ImGui::Checkbox(trc("images.enable_color_key"), &img.enableColorKey)) g_configIsDirty = true;
             ImGui::BeginDisabled(!img.enableColorKey);
 
             int imgColorKeyToRemove = -1;
@@ -187,7 +187,7 @@ if (ImGui::BeginTabItem("Images")) {
                 ImGui::PushID(static_cast<int>(k));
                 auto& ck = img.colorKeys[k];
 
-                ImGui::Text("Key %zu:", k + 1);
+                ImGui::Text(trc("images.key_format", k + 1));
                 ImGui::SameLine();
                 ImGui::PushItemWidth(150.0f);
                 if (ImGui::ColorEdit3("##color", &ck.color.r, ImGuiColorEditFlags_NoLabel)) g_configIsDirty = true;
@@ -207,7 +207,7 @@ if (ImGui::BeginTabItem("Images")) {
             }
 
             ImGui::BeginDisabled(img.colorKeys.size() >= ConfigDefaults::MAX_COLOR_KEYS);
-            if (ImGui::Button("+ Add Color Key")) {
+            if (ImGui::Button(trc("images.add_color_key"))) {
                 ColorKeyConfig newKey;
                 newKey.color = { 0.0f, 0.0f, 0.0f };
                 newKey.sensitivity = 0.05f;
@@ -218,30 +218,30 @@ if (ImGui::BeginTabItem("Images")) {
 
             ImGui::EndDisabled();
 
-            ImGui::SeparatorText("Border");
-            if (ImGui::Checkbox("Enable Border##Image", &img.border.enabled)) { g_configIsDirty = true; }
+            ImGui::SeparatorText(trc("images.border"));
+            if (ImGui::Checkbox((tr("images.enable_border") + "##Image").c_str(), &img.border.enabled)) { g_configIsDirty = true; }
             ImGui::SameLine();
-            HelpMarker("Draw a border around the image overlay.");
+            HelpMarker(trc("images.tooltip.border"));
 
             if (img.border.enabled) {
-                ImGui::Text("Color:");
+                ImGui::Text(trc("images.border_color"));
                 ImVec4 borderCol = ImVec4(img.border.color.r, img.border.color.g, img.border.color.b, 1.0f);
                 if (ImGui::ColorEdit3("##BorderColorImage", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
                     img.border.color = { borderCol.x, borderCol.y, borderCol.z };
                     g_configIsDirty = true;
                 }
 
-                ImGui::Text("Width:");
+                ImGui::Text(trc("images.border_width"));
                 ImGui::SetNextItemWidth(100);
                 if (Spinner("##BorderWidthImage", &img.border.width, 1, 1, 50)) { g_configIsDirty = true; }
                 ImGui::SameLine();
-                ImGui::TextDisabled("px");
+                ImGui::TextDisabled(trc("label.px"));
 
-                ImGui::Text("Corner Radius:");
+                ImGui::Text(trc("images.border_radius"));
                 ImGui::SetNextItemWidth(100);
                 if (Spinner("##BorderRadiusImage", &img.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
                 ImGui::SameLine();
-                ImGui::TextDisabled("px");
+                ImGui::TextDisabled(trc("label.px"));
             }
 
             ImGui::TreePop();
@@ -262,9 +262,9 @@ if (ImGui::BeginTabItem("Images")) {
     }
 
     ImGui::Separator();
-    if (ImGui::Button("Add New Image")) {
+    if (ImGui::Button(trc("button.add_image"))) {
         ImageConfig newImg;
-        newImg.name = "New Image " + std::to_string(g_config.images.size() + 1);
+        newImg.name = tr("images.new_image") + " " + std::to_string(g_config.images.size() + 1);
         newImg.relativeTo = "centerViewport";
         g_config.images.push_back(newImg);
         g_configIsDirty = true;
@@ -282,21 +282,21 @@ if (ImGui::BeginTabItem("Images")) {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Reset to Defaults##images")) { ImGui::OpenPopup("Reset Images to Defaults?"); }
+    if (ImGui::Button((tr("button.reset_defaults") + "##images").c_str())) { ImGui::OpenPopup(trc("images.reset_to_defaults_popup")); }
 
-    if (ImGui::BeginPopupModal("Reset Images to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-        ImGui::Text("This will delete ALL custom images and restore the default images.");
-        ImGui::Text("This action cannot be undone.");
+    if (ImGui::BeginPopupModal(trc("images.reset_to_defaults_popup"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), trc("label.warning"));
+        ImGui::Text(trc("images.reset_warning"));
+        ImGui::Text(trc("label.action_cannot_be_undone"));
         ImGui::Separator();
-        if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
+        if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
             g_config.images = GetDefaultImages();
             g_configIsDirty = true;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
 

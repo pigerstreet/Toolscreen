@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem("Mirrors")) {
+if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -24,11 +24,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
         }
 
         // Popup modal outside of node_open block so it can be displayed even when collapsed
-        std::string popup_id = "Delete Mirror?##" + std::to_string(i);
+        std::string popup_id = (tr("mirrors.delete_mirror") + "##" + std::to_string(i));
         if (ImGui::BeginPopupModal(popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Are you sure you want to delete mirror '%s'?\nThis cannot be undone.", mirror.name.c_str());
+            ImGui::Text(tr("mirrors.delete_mirror_confirm", mirror.name.c_str()).c_str());
             ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0))) {
+            if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 if (selectedMirrorName == mirror.name) selectedMirrorName = "";
                 mirror_to_remove = (int)i;
                 g_configIsDirty = true;
@@ -36,7 +36,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
             }
             ImGui::SetItemDefaultFocus();
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
 
@@ -45,10 +45,12 @@ if (ImGui::BeginTabItem("Mirrors")) {
         std::string oldMirrorName = mirror.name;
 
         bool node_open = ImGui::TreeNodeEx("##mirror_node", node_flags, "%s", mirror.name.c_str());
+
         if (ImGui::IsItemClicked(0)) { selectedMirrorName = mirror.name; }
 
         if (node_open) {
-            ImGui::Text("Name");
+
+            ImGui::Text(trc("mirrors.name"));
             ImGui::SameLine();
 
             bool hasDuplicate = HasDuplicateMirrorName(mirror.name, i);
@@ -104,13 +106,13 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
             if (hasDuplicate) {
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Name already exists!");
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), trc("mirrors.name_duplicate"));
             }
 
             ImGui::Separator();
             ImGui::Columns(2, "mirror_props", false);
             ImGui::SetColumnWidth(0, 150);
-            ImGui::Text("FPS");
+            ImGui::Text(trc("label.fps"));
             ImGui::NextColumn();
             if (Spinner("##fps", &mirror.fps, 1, 1)) {
                 g_configIsDirty = true;
@@ -122,7 +124,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
             }
             ImGui::NextColumn();
 
-            ImGui::Text("Border Settings");
+            ImGui::Text(trc("mirrors.border_settings"));
             ImGui::NextColumn();
 
             auto updateBorderSettings = [&]() {
@@ -133,7 +135,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
             };
 
-            const char* borderTypes[] = { "Dynamic (around content)", "Static (shape overlay)" };
+            const char* borderTypes[] = { trc("mirrors.dynamic_border"), trc("mirrors.static_border") };
             int currentType = static_cast<int>(mirror.border.type);
             ImGui::PushItemWidth(180);
             if (ImGui::Combo("##borderType", &currentType, borderTypes, IM_ARRAYSIZE(borderTypes))) {
@@ -146,11 +148,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
             if (mirror.border.type == MirrorBorderType::Dynamic) {
                 ImGui::Columns(1);
                 ImGui::Indent(20);
-                ImGui::TextDisabled("Draws border around matching pixels");
+                ImGui::TextDisabled(trc("mirrors.border_dynamic_shape_overlay"));
 
                 ImGui::Columns(2, nullptr, false);
                 ImGui::SetColumnWidth(0, 150);
-                ImGui::Text("Thickness");
+                ImGui::Text(trc("mirrors.border_thickness"));
                 ImGui::NextColumn();
                 if (Spinner("##dynamicThickness", &mirror.border.dynamicThickness, 1, 0)) {
                     g_configIsDirty = true;
@@ -158,7 +160,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 }
                 ImGui::NextColumn();
 
-                ImGui::Text("Border Color");
+                ImGui::Text(trc("mirrors.border_color"));
                 ImGui::NextColumn();
                 float dynColorArr[4] = { mirror.colors.border.r, mirror.colors.border.g, mirror.colors.border.b, mirror.colors.border.a };
                 ImGui::PushItemWidth(110);
@@ -173,12 +175,12 @@ if (ImGui::BeginTabItem("Mirrors")) {
             } else {
                 ImGui::Columns(1);
                 ImGui::Indent(20);
-                ImGui::TextDisabled("Static shape overlay (set Thickness to 0 to disable)");
+                ImGui::TextDisabled(trc("mirrors.border_static_shape_overlay"));
 
                 ImGui::Columns(2, nullptr, false);
                 ImGui::SetColumnWidth(0, 150);
 
-                ImGui::Text("Thickness");
+                ImGui::Text(trc("mirrors.border_thickness"));
                 ImGui::NextColumn();
                 if (Spinner("##staticThickness", &mirror.border.staticThickness, 1, 0)) {
                     g_configIsDirty = true;
@@ -187,9 +189,9 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 ImGui::NextColumn();
 
                 if (mirror.border.staticThickness > 0) {
-                    ImGui::Text("Shape");
+                    ImGui::Text(trc("mirrors.border_shape"));
                     ImGui::NextColumn();
-                    const char* shapes[] = { "Rectangle", "Circle/Ellipse" };
+                    const char* shapes[] = { trc("mirrors.shape.rectangle"), trc("mirrors.shape.circle_ellipse") };
                     int currentShape = static_cast<int>(mirror.border.staticShape);
                     ImGui::PushItemWidth(140);
                     if (ImGui::Combo("##staticShape", &currentShape, shapes, IM_ARRAYSIZE(shapes))) {
@@ -200,7 +202,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     ImGui::PopItemWidth();
                     ImGui::NextColumn();
 
-                    ImGui::Text("Color");
+                    ImGui::Text(trc("mirrors.color"));
                     ImGui::NextColumn();
                     float staticColorArr[4] = { mirror.border.staticColor.r, mirror.border.staticColor.g, mirror.border.staticColor.b,
                                                 mirror.border.staticColor.a };
@@ -214,7 +216,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     ImGui::NextColumn();
 
                     if (mirror.border.staticShape == MirrorBorderShape::Rectangle) {
-                        ImGui::Text("Corner Radius");
+                        ImGui::Text(trc("mirrors.border_radius"));
                         ImGui::NextColumn();
                         if (Spinner("##staticRadius", &mirror.border.staticRadius, 1, 0)) {
                             g_configIsDirty = true;
@@ -225,11 +227,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
                     ImGui::Columns(1);
                     ImGui::Spacing();
-                    ImGui::TextDisabled("Position/Size Offsets (relative to mirror)");
+                    ImGui::TextDisabled(trc("mirrors.tooltip.position_size_offsets"));
                     ImGui::Columns(2, nullptr, false);
                     ImGui::SetColumnWidth(0, 150);
 
-                    ImGui::Text("X Offset");
+                    ImGui::Text(trc("mirrors.x_offset"));
                     ImGui::NextColumn();
                     if (Spinner("##staticOffsetX", &mirror.border.staticOffsetX, 1)) {
                         g_configIsDirty = true;
@@ -237,7 +239,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     }
                     ImGui::NextColumn();
 
-                    ImGui::Text("Y Offset");
+                    ImGui::Text(trc("mirrors.y_offset"));
                     ImGui::NextColumn();
                     if (Spinner("##staticOffsetY", &mirror.border.staticOffsetY, 1)) {
                         g_configIsDirty = true;
@@ -245,7 +247,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     }
                     ImGui::NextColumn();
 
-                    ImGui::Text("Width (0=auto)");
+                    ImGui::Text(trc("mirrors.width"));
                     ImGui::NextColumn();
                     if (Spinner("##staticWidth", &mirror.border.staticWidth, 1, 0)) {
                         g_configIsDirty = true;
@@ -253,7 +255,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     }
                     ImGui::NextColumn();
 
-                    ImGui::Text("Height (0=auto)");
+                    ImGui::Text(trc("mirrors.height"));
                     ImGui::NextColumn();
                     if (Spinner("##staticHeight", &mirror.border.staticHeight, 1, 0)) {
                         g_configIsDirty = true;
@@ -267,11 +269,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
             ImGui::Columns(2, nullptr, false);
             ImGui::SetColumnWidth(0, 150);
-            ImGui::Text("Output Scale");
+            ImGui::Text(trc("mirrors.output_scale"));
             ImGui::NextColumn();
-            ImGui::TextDisabled("Note: Mirror output settings here do not affect mirrors rendered inside a Mirror Group.");
+            ImGui::TextDisabled(trc("mirrors.tooltip.output_scale"));
 
-            if (ImGui::Checkbox("Separate X/Y##scale", &mirror.output.separateScale)) {
+            if (ImGui::Checkbox((tr("mirrors.separate_x_y") + "##scale").c_str(), &mirror.output.separateScale)) {
                 g_configIsDirty = true;
                 if (mirror.output.separateScale) {
                     mirror.output.scaleX = mirror.output.scale;
@@ -315,7 +317,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 }
             }
             ImGui::NextColumn();
-            ImGui::Text("Capture Width");
+            ImGui::Text(trc("mirrors.capture_width"));
             ImGui::NextColumn();
             if (Spinner("##cap_w", &mirror.captureWidth, 1, 1)) {
                 g_configIsDirty = true;
@@ -327,7 +329,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
             }
             ImGui::NextColumn();
-            ImGui::Text("Capture Height");
+            ImGui::Text(trc("mirrors.capture_height"));
             ImGui::NextColumn();
             if (Spinner("##cap_h", &mirror.captureHeight, 1, 1)) {
                 g_configIsDirty = true;
@@ -342,12 +344,12 @@ if (ImGui::BeginTabItem("Mirrors")) {
             ImGui::Columns(1);
             ImGui::Separator();
 
-            ImGui::Text("Target Colors (max 8)");
+            ImGui::Text(trc("mirrors.target_color"));
             int target_color_to_remove = -1;
             for (size_t j = 0; j < mirror.colors.targetColors.size(); ++j) {
                 ImGui::PushID(static_cast<int>(j));
 
-                std::string color_label = "Color " + std::to_string(j + 1);
+                std::string color_label = tr("mirrors.color") + " " + std::to_string(j + 1);
                 float targetColorArr[3] = {
                     mirror.colors.targetColors[j].r,
                     mirror.colors.targetColors[j].g,
@@ -388,7 +390,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
             }
 
             if (mirror.colors.targetColors.size() < 8) {
-                if (ImGui::Button("+ Add Target Color")) {
+                if (ImGui::Button(trc("mirrors.add_target_color"))) {
                     Color newColor = { 0.0f, 1.0f, 0.0f };
                     mirror.colors.targetColors.push_back(newColor);
                     g_configIsDirty = true;
@@ -400,7 +402,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 }
             }
 
-            if (ImGui::SliderFloat("Color Sensitivity", &mirror.colorSensitivity, 0.001f, 1.0f)) {
+            if (ImGui::SliderFloat(trc("mirrors.color_sensitivity"), &mirror.colorSensitivity, 0.001f, 1.0f)) {
                 g_configIsDirty = true;
                 UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
                                             mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
@@ -408,27 +410,27 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 auto it = g_mirrorInstances.find(mirror.name);
                 if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
             }
-            if (ImGui::Checkbox("Color Passthrough", &mirror.colorPassthrough)) {
+            if (ImGui::Checkbox(trc("mirrors.color_passthrough"), &mirror.colorPassthrough)) {
                 g_configIsDirty = true;
                 UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
                                             mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
                 std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
-            }
-
-            if (ImGui::SliderFloat("Opacity", &mirror.opacity, 0.0f, 1.0f)) {
-                g_configIsDirty = true;
                 auto it = g_mirrorInstances.find(mirror.name);
                 if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, matching pixels output their original color instead of the Output Color");
+                ImGui::SetTooltip(trc("mirrors.tooltip.color_passthrough"));
+            }
+
+            if (ImGui::SliderFloat(trc("mirrors.opacity"), &mirror.opacity, 0.0f, 1.0f)) {
+                g_configIsDirty = true;
+                auto it = g_mirrorInstances.find(mirror.name);
+                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
             }
 
             if (mirror.colorPassthrough) { ImGui::BeginDisabled(); }
             float outputColorArr[4] = { mirror.colors.output.r, mirror.colors.output.g, mirror.colors.output.b, mirror.colors.output.a };
-            bool outputColorChangedByWidget = ImGui::ColorEdit4("Output Color", outputColorArr, ImGuiColorEditFlags_AlphaBar);
+            bool outputColorChangedByWidget = ImGui::ColorEdit4(trc("mirrors.output_color"), outputColorArr, ImGuiColorEditFlags_AlphaBar);
             bool outputColorChanged = outputColorChangedByWidget || outputColorArr[0] != mirror.colors.output.r ||
                                       outputColorArr[1] != mirror.colors.output.g || outputColorArr[2] != mirror.colors.output.b ||
                                       outputColorArr[3] != mirror.colors.output.a;
@@ -443,7 +445,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
             }
             if (mirror.colorPassthrough) { ImGui::EndDisabled(); }
             float borderColorArr[4] = { mirror.colors.border.r, mirror.colors.border.g, mirror.colors.border.b, mirror.colors.border.a };
-            bool borderColorChangedByWidget = ImGui::ColorEdit4("Border Color", borderColorArr, ImGuiColorEditFlags_AlphaBar);
+            bool borderColorChangedByWidget = ImGui::ColorEdit4(trc("mirrors.border_color"), borderColorArr, ImGuiColorEditFlags_AlphaBar);
             bool borderColorChanged = borderColorChangedByWidget || borderColorArr[0] != mirror.colors.border.r ||
                                       borderColorArr[1] != mirror.colors.border.g || borderColorArr[2] != mirror.colors.border.b ||
                                       borderColorArr[3] != mirror.colors.border.a;
@@ -456,7 +458,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 auto it = g_mirrorInstances.find(mirror.name);
                 if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
             }
-            if (ImGui::Checkbox("Raw Output", &mirror.rawOutput)) {
+            if (ImGui::Checkbox(trc("mirrors.raw_output"), &mirror.rawOutput)) {
                 g_configIsDirty = true;
                 UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
                                             mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
@@ -472,9 +474,9 @@ if (ImGui::BeginTabItem("Mirrors")) {
             }
             ImGui::Separator();
 
-            ImGui::Text("Output Position");
+            ImGui::Text(trc("mirrors.output_position"));
 
-            if (ImGui::Checkbox("Relative to screen##MirrorPos", &mirror.output.useRelativePosition)) {
+            if (ImGui::Checkbox((tr("mirrors.relative_to_screen") + "##MirrorPos").c_str(), &mirror.output.useRelativePosition)) {
                 g_configIsDirty = true;
                 if (mirror.output.useRelativePosition) {
                     int screenWidth = GetCachedWindowWidth();
@@ -484,12 +486,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 }
             }
             ImGui::SameLine();
-            HelpMarker("When enabled, position is stored as percentages of screen size.\n"
-                       "This makes configs portable across different screen resolutions.");
+            HelpMarker(trc("mirrors.tooltip.relative_to_screen"));
 
             ImGui::Columns(3, "output_pos_cols", false);
             const char* output_rel_to_preview = getFriendlyName(mirror.output.relativeTo, relativeToOptions);
-            if (ImGui::BeginCombo("Relative To", output_rel_to_preview)) {
+            if (ImGui::BeginCombo(trc("mirrors.relative_to"), output_rel_to_preview)) {
                 for (const auto& option : relativeToOptions) {
                     if (ImGui::Selectable(option.second, mirror.output.relativeTo == option.first)) {
                         mirror.output.relativeTo = option.first;
@@ -511,7 +512,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 int screenWidth = GetCachedWindowWidth();
                 int screenHeight = GetCachedWindowHeight();
 
-                ImGui::Text("X %%");
+                ImGui::Text(trc("mirrors.x_percent"));
                 ImGui::SameLine();
                 float xPercent = mirror.output.relativeX * 100.0f;
                 ImGui::SetNextItemWidth(200);
@@ -528,7 +529,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     if (it != g_mirrorInstances.end()) { it->second.cachedRenderState.isValid = false; }
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Y %%");
+                ImGui::Text(trc("mirrors.y_percent"));
                 ImGui::SameLine();
                 float yPercent = mirror.output.relativeY * 100.0f;
                 ImGui::SetNextItemWidth(200);
@@ -545,7 +546,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     if (it != g_mirrorInstances.end()) { it->second.cachedRenderState.isValid = false; }
                 }
             } else {
-                ImGui::Text("X Offset");
+                ImGui::Text(trc("mirrors.x_offset"));
                 ImGui::SameLine();
                 if (Spinner("##out_x", &mirror.output.x)) {
                     g_configIsDirty = true;
@@ -558,7 +559,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     if (it != g_mirrorInstances.end()) { it->second.cachedRenderState.isValid = false; }
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Y Offset");
+                ImGui::Text(trc("mirrors.y_offset"));
                 ImGui::SameLine();
                 if (Spinner("##out_y", &mirror.output.y)) {
                     g_configIsDirty = true;
@@ -572,7 +573,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 }
             }
 
-            ImGui::SeparatorText("Input/Capture Zones");
+            ImGui::SeparatorText(trc("mirrors.input_or_capture_zones"));
             int zone_to_remove = -1;
             if (ImGui::BeginTable("zones_table", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
                 ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthFixed, 150.0f);
@@ -619,20 +620,20 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     ImGui::TableSetColumnIndex(3);
                     std::string delete_zone_label = "X##delete_zone_" + std::to_string(j);
                     if (ImGui::Button(delete_zone_label.c_str(), ImVec2(-1, ImGui::GetFrameHeight()))) {
-                        std::string zone_popup_id = "Delete Zone?##" + std::to_string(j);
+                        std::string zone_popup_id = tr("mirrors.delete_zone") + "##" + std::to_string(j);
                         ImGui::OpenPopup(zone_popup_id.c_str());
                     }
-                    std::string zone_popup_id = "Delete Zone?##" + std::to_string(j);
+                    std::string zone_popup_id = tr("mirrors.delete_zone") + "##" + std::to_string(j);
                     if (ImGui::BeginPopupModal(zone_popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                        ImGui::Text("Delete capture zone %zu?", j + 1);
+                        ImGui::Text(tr("mirrors.delete_capture_zone", j + 1).c_str());
                         ImGui::Separator();
-                        if (ImGui::Button("OK")) {
+                        if (ImGui::Button(trc("button.ok"))) {
                             zone_to_remove = (int)j;
                             g_configIsDirty = true;
                             ImGui::CloseCurrentPopup();
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); }
+                        if (ImGui::Button(trc("label.cancel"))) { ImGui::CloseCurrentPopup(); }
                         ImGui::EndPopup();
                     }
                     ImGui::PopID();
@@ -647,7 +648,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 auto it = g_mirrorInstances.find(mirror.name);
                 if (it != g_mirrorInstances.end()) { it->second.forceUpdateFrames = 3; }
             }
-            if (ImGui::Button("Add New Capture Zone")) {
+            if (ImGui::Button(trc("mirrors.add_new_capture_zone"))) {
                 MirrorCaptureConfig newZone;
                 newZone.relativeTo = "centerViewport";
                 mirror.input.push_back(newZone);
@@ -681,7 +682,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
         g_configIsDirty = true;
     }
     ImGui::Separator();
-    if (ImGui::Button("Add New Mirror")) {
+    if (ImGui::Button(trc("mirrors.add_new_mirror"))) {
         MirrorConfig newMirror;
         newMirror.name = "New Mirror " + std::to_string(g_config.mirrors.size() + 1);
         newMirror.output.relativeTo = "centerViewport";
@@ -694,15 +695,14 @@ if (ImGui::BeginTabItem("Mirrors")) {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Reset to Defaults##mirrors")) { ImGui::OpenPopup("Reset Mirrors & Groups to Defaults?"); }
+    if (ImGui::Button((tr("mirrors.reset_to_defaults") + "##mirrors").c_str())) { ImGui::OpenPopup(trc("mirrors.reset_mirrors_and_groups")); }
 
-    if (ImGui::BeginPopupModal("Reset Mirrors & Groups to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-        ImGui::Text("This will delete ALL custom mirrors and mirror groups\n"
-                   "and restore the default mirrors and mirror groups.");
-        ImGui::Text("This action cannot be undone.");
+    if (ImGui::BeginPopupModal(trc("mirrors.reset_mirrors_and_groups"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), trc("label.warning"));
+        ImGui::Text(trc("mirrors.warning.reset_mirrors_and_groups"));
+        ImGui::Text(trc("label.action_cannot_be_undone"));
         ImGui::Separator();
-        if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
+        if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
             g_config.mirrors = GetDefaultMirrors();
             g_config.mirrorGroups = GetDefaultMirrorGroups();
 
@@ -748,11 +748,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
         }
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
 
-    ImGui::SeparatorText("Mirror Groups");
+    ImGui::SeparatorText(trc("mirrors.mirror_groups"));
 
     int group_to_remove = -1;
     for (size_t i = 0; i < g_config.mirrorGroups.size(); ++i) {
@@ -764,15 +764,15 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
         std::string delete_group_label = "X##delete_mirror_group_" + std::to_string(i);
         if (ImGui::Button(delete_group_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
-            std::string popup_id_group = "Delete Mirror Group?##" + std::to_string(i);
+            std::string popup_id_group = tr("mirrors.delete_group") + "##" + std::to_string(i);
             ImGui::OpenPopup(popup_id_group.c_str());
         }
 
-        std::string popup_id_group = "Delete Mirror Group?##" + std::to_string(i);
+        std::string popup_id_group = tr("mirrors.delete_group") + "##" + std::to_string(i);
         if (ImGui::BeginPopupModal(popup_id_group.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Are you sure you want to delete mirror group '%s'?\nThis cannot be undone.", group.name.c_str());
+            ImGui::Text(tr("mirrors.delete_group_confirm", group.name.c_str()).c_str());
             ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0))) {
+            if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 if (selectedGroupName == group.name) selectedGroupName = "";
                 group_to_remove = (int)i;
                 g_configIsDirty = true;
@@ -780,7 +780,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
             }
             ImGui::SetItemDefaultFocus();
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
 
@@ -789,7 +789,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
         if (ImGui::IsItemClicked(0)) { selectedGroupName = group.name; }
 
         if (node_open) {
-            ImGui::Text("Name");
+            ImGui::Text(trc("mirrors.name"));
             ImGui::SameLine();
             std::string oldGroupName = group.name;
 
@@ -819,13 +819,13 @@ if (ImGui::BeginTabItem("Mirrors")) {
             if (hasDuplicateGroup) { ImGui::PopStyleColor(3); }
             if (hasDuplicateGroup) {
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Name already exists!");
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), trc("mirrors.name_duplicate"));
             }
 
             ImGui::Separator();
-            ImGui::Text("Group Output Position");
+            ImGui::Text(trc("mirrors.group_output_position"));
 
-            if (ImGui::Checkbox("Relative to screen##GroupPos", &group.output.useRelativePosition)) {
+            if (ImGui::Checkbox((tr("mirrors.relative_to_screen") + "##GroupPos").c_str(), &group.output.useRelativePosition)) {
                 g_configIsDirty = true;
                 if (group.output.useRelativePosition) {
                     int screenWidth = GetCachedWindowWidth();
@@ -835,12 +835,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 }
             }
             ImGui::SameLine();
-            HelpMarker("When enabled, position is stored as percentages of screen size.\n"
-                       "This makes configs portable across different screen resolutions.");
+            HelpMarker(trc("mirrors.tooltip.relative_to_screen"));
 
             ImGui::Columns(3, "group_output_pos_cols", false);
             const char* group_output_rel_to_preview = getFriendlyName(group.output.relativeTo, relativeToOptions);
-            if (ImGui::BeginCombo("Relative To##group_output", group_output_rel_to_preview)) {
+            if (ImGui::BeginCombo((tr("mirrors.relative_to") + "##group_output").c_str(), group_output_rel_to_preview)) {
                 for (const auto& option : relativeToOptions) {
                     if (ImGui::Selectable(option.second, group.output.relativeTo == option.first)) {
                         group.output.relativeTo = option.first;
@@ -860,7 +859,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 int screenWidth = GetCachedWindowWidth();
                 int screenHeight = GetCachedWindowHeight();
 
-                ImGui::Text("X %%");
+                ImGui::Text(trc("mirrors.x_percent"));
                 ImGui::SameLine();
                 float xPercent = group.output.relativeX * 100.0f;
                 ImGui::SetNextItemWidth(200);
@@ -876,7 +875,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                                                     group.output.relativeTo);
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Y %%");
+                ImGui::Text(trc("mirrors.y_percent"));
                 ImGui::SameLine();
                 float yPercent = group.output.relativeY * 100.0f;
                 ImGui::SetNextItemWidth(200);
@@ -892,7 +891,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                                                     group.output.relativeTo);
                 }
             } else {
-                ImGui::Text("X Offset");
+                ImGui::Text(trc("mirrors.x_offset"));
                 ImGui::SameLine();
                 if (Spinner("##group_out_x", &group.output.x)) {
                     g_configIsDirty = true;
@@ -903,7 +902,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                                                     group.output.relativeTo);
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Y Offset");
+                ImGui::Text(trc("mirrors.y_offset"));
                 ImGui::SameLine();
                 if (Spinner("##group_out_y", &group.output.y)) {
                     g_configIsDirty = true;
@@ -917,10 +916,9 @@ if (ImGui::BeginTabItem("Mirrors")) {
             ImGui::Columns(1);
 
             ImGui::Separator();
-            ImGui::Text("Group Mirrors (Per-Item Sizing)");
+            ImGui::Text(trc("mirrors.per_item_sizing"));
             ImGui::SameLine();
-            HelpMarker("Width%% and Height%% only affect mirrors when rendered as part of this group.\\n"
-                       "Mirrors used outside this group will render at their original size.");
+            HelpMarker(trc("mirrors.tooltip.per_item_sizing"));
 
             int group_mirror_to_remove = -1;
             for (size_t j = 0; j < group.mirrors.size(); ++j) {
@@ -931,7 +929,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 if (ImGui::Button(del_group_mirror_label.c_str())) { group_mirror_to_remove = (int)j; }
                 ImGui::SameLine();
                 if (ImGui::Checkbox("##enabled", &item.enabled)) { g_configIsDirty = true; }
-                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Enable/disable this mirror in the group"); }
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip(trc("mirrors.tooltip.enable_in_group")); }
                 ImGui::SameLine();
                 if (!item.enabled) { ImGui::BeginDisabled(); }
                 ImGui::Text("%s", item.mirrorId.c_str());
@@ -954,12 +952,12 @@ if (ImGui::BeginTabItem("Mirrors")) {
                 ImGui::Text("X:");
                 ImGui::SameLine();
                 if (Spinner("##offset_x", &item.offsetX, 1, INT_MIN, INT_MAX, 40.0f, 0.0f)) { g_configIsDirty = true; }
-                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("X Offset (pixels)"); }
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip(trc("label.x_offset_pixels")); }
                 ImGui::SameLine();
                 ImGui::Text("Y:");
                 ImGui::SameLine();
                 if (Spinner("##offset_y", &item.offsetY, 1, INT_MIN, INT_MAX, 40.0f, 0.0f)) { g_configIsDirty = true; }
-                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Y Offset (pixels)"); }
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip(trc("label.y_offset_pixels")); }
                 if (!item.enabled) { ImGui::EndDisabled(); }
 
                 ImGui::PopID();
@@ -972,7 +970,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
             std::vector<std::string> existingMirrorIds;
             for (const auto& item : group.mirrors) { existingMirrorIds.push_back(item.mirrorId); }
 
-            if (ImGui::BeginCombo("Add Mirror##add_mirror_to_group", "[Select Mirror]")) {
+            if (ImGui::BeginCombo((tr("mirrors.add_mirror") + "##add_mirror_to_group").c_str(), trc("mirrors.select_mirror"))) {
                 for (const auto& mirrorConf : g_config.mirrors) {
                     if (std::find(existingMirrorIds.begin(), existingMirrorIds.end(), mirrorConf.name) == existingMirrorIds.end()) {
                         if (ImGui::Selectable(mirrorConf.name.c_str())) {
@@ -1006,7 +1004,7 @@ if (ImGui::BeginTabItem("Mirrors")) {
         g_configIsDirty = true;
     }
 
-    if (ImGui::Button("Add New Mirror Group")) {
+    if (ImGui::Button(trc("mirrors.add_new_group"))) {
         MirrorGroupConfig newGroup;
         newGroup.name = "New Group " + std::to_string(g_config.mirrorGroups.size() + 1);
         newGroup.output.relativeTo = "centerViewport";

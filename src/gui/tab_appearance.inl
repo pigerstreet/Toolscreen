@@ -1,13 +1,13 @@
-            if (ImGui::BeginTabItem("Appearance")) {
+            if (ImGui::BeginTabItem(trc("tabs.appearance"))) {
                 g_currentlyEditingMirror = "";
                 g_imageDragMode.store(false);
                 g_windowOverlayDragMode.store(false);
 
-                ImGui::SeparatorText("Color Scheme");
+                ImGui::SeparatorText(trc("appearance.color_scheme"));
 
-                ImGui::Text("Preset Themes:");
+                ImGui::Text(trc("appearance.preset_themes"));
                 ImGui::SameLine();
-                HelpMarker("Select a preset theme or customize individual colors below.");
+                HelpMarker(trc("appearance.tooltip.reset_themes"));
 
                 if (ImGui::Button("Dark")) {
                     ImGui::StyleColorsDark();
@@ -455,9 +455,9 @@
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                ImGui::Text("Custom Colors:");
+                ImGui::Text(trc("appearance.custom_colors"));
                 ImGui::SameLine();
-                HelpMarker("Click on a color to open the color picker. Changes are applied immediately.");
+                HelpMarker(trc("appearance.tooltip.custom_colors"));
 
                 ImGui::Spacing();
 
@@ -465,27 +465,27 @@
 
                 const bool colorListVisible = ImGui::BeginChild("ColorList", ImVec2(0, 400), true);
                 if (colorListVisible) {
-                    if (ImGui::CollapsingHeader("Window", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::CollapsingHeader(trc("appearance.window"), ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Window Background##Col", (float*)&style.Colors[ImGuiCol_WindowBg])) {
+                        if (ImGui::ColorEdit4((tr("appearance.window_background") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_WindowBg])) {
                             g_config.appearance.customColors["WindowBg"] = {style.Colors[ImGuiCol_WindowBg].x, style.Colors[ImGuiCol_WindowBg].y, style.Colors[ImGuiCol_WindowBg].z, style.Colors[ImGuiCol_WindowBg].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Child Background##Col", (float*)&style.Colors[ImGuiCol_ChildBg])) {
+                        if (ImGui::ColorEdit4((tr("appearance.child_background") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ChildBg])) {
                             g_config.appearance.customColors["ChildBg"] = {style.Colors[ImGuiCol_ChildBg].x, style.Colors[ImGuiCol_ChildBg].y, style.Colors[ImGuiCol_ChildBg].z, style.Colors[ImGuiCol_ChildBg].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Popup Background##Col", (float*)&style.Colors[ImGuiCol_PopupBg])) {
+                        if (ImGui::ColorEdit4((tr("appearance.popup_background") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_PopupBg])) {
                             g_config.appearance.customColors["PopupBg"] = {style.Colors[ImGuiCol_PopupBg].x, style.Colors[ImGuiCol_PopupBg].y, style.Colors[ImGuiCol_PopupBg].z, style.Colors[ImGuiCol_PopupBg].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Border##Col", (float*)&style.Colors[ImGuiCol_Border])) {
+                        if (ImGui::ColorEdit4((tr("appearance.border") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_Border])) {
                             g_config.appearance.customColors["Border"] = {style.Colors[ImGuiCol_Border].x, style.Colors[ImGuiCol_Border].y, style.Colors[ImGuiCol_Border].z, style.Colors[ImGuiCol_Border].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -494,15 +494,15 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Text")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.text"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Text##Col", (float*)&style.Colors[ImGuiCol_Text])) {
+                        if (ImGui::ColorEdit4((tr("appearance.text") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_Text])) {
                             g_config.appearance.customColors["Text"] = {style.Colors[ImGuiCol_Text].x, style.Colors[ImGuiCol_Text].y, style.Colors[ImGuiCol_Text].z, style.Colors[ImGuiCol_Text].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Text Disabled##Col", (float*)&style.Colors[ImGuiCol_TextDisabled])) {
+                        if (ImGui::ColorEdit4((tr("appearance.text_disabled") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_TextDisabled])) {
                             g_config.appearance.customColors["TextDisabled"] = {style.Colors[ImGuiCol_TextDisabled].x, style.Colors[ImGuiCol_TextDisabled].y, style.Colors[ImGuiCol_TextDisabled].z, style.Colors[ImGuiCol_TextDisabled].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -511,21 +511,21 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Frame (Input Fields)")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.frame"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Frame Background##Col", (float*)&style.Colors[ImGuiCol_FrameBg])) {
+                        if (ImGui::ColorEdit4((tr("appearance.frame_background") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_FrameBg])) {
                             g_config.appearance.customColors["FrameBg"] = {style.Colors[ImGuiCol_FrameBg].x, style.Colors[ImGuiCol_FrameBg].y, style.Colors[ImGuiCol_FrameBg].z, style.Colors[ImGuiCol_FrameBg].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Frame Hovered##Col", (float*)&style.Colors[ImGuiCol_FrameBgHovered])) {
+                        if (ImGui::ColorEdit4((tr("appearance.frame_hovered") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_FrameBgHovered])) {
                             g_config.appearance.customColors["FrameBgHovered"] = {style.Colors[ImGuiCol_FrameBgHovered].x, style.Colors[ImGuiCol_FrameBgHovered].y, style.Colors[ImGuiCol_FrameBgHovered].z, style.Colors[ImGuiCol_FrameBgHovered].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Frame Active##Col", (float*)&style.Colors[ImGuiCol_FrameBgActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.frame_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_FrameBgActive])) {
                             g_config.appearance.customColors["FrameBgActive"] = {style.Colors[ImGuiCol_FrameBgActive].x, style.Colors[ImGuiCol_FrameBgActive].y, style.Colors[ImGuiCol_FrameBgActive].z, style.Colors[ImGuiCol_FrameBgActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -534,21 +534,21 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Title Bar")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.title_bar"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Title Background##Col", (float*)&style.Colors[ImGuiCol_TitleBg])) {
+                        if (ImGui::ColorEdit4((tr("appearance.title_background") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_TitleBg])) {
                             g_config.appearance.customColors["TitleBg"] = {style.Colors[ImGuiCol_TitleBg].x, style.Colors[ImGuiCol_TitleBg].y, style.Colors[ImGuiCol_TitleBg].z, style.Colors[ImGuiCol_TitleBg].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Title Active##Col", (float*)&style.Colors[ImGuiCol_TitleBgActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.title_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_TitleBgActive])) {
                             g_config.appearance.customColors["TitleBgActive"] = {style.Colors[ImGuiCol_TitleBgActive].x, style.Colors[ImGuiCol_TitleBgActive].y, style.Colors[ImGuiCol_TitleBgActive].z, style.Colors[ImGuiCol_TitleBgActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Title Collapsed##Col", (float*)&style.Colors[ImGuiCol_TitleBgCollapsed])) {
+                        if (ImGui::ColorEdit4((tr("appearance.title_collapsed") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_TitleBgCollapsed])) {
                             g_config.appearance.customColors["TitleBgCollapsed"] = {style.Colors[ImGuiCol_TitleBgCollapsed].x, style.Colors[ImGuiCol_TitleBgCollapsed].y, style.Colors[ImGuiCol_TitleBgCollapsed].z, style.Colors[ImGuiCol_TitleBgCollapsed].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -557,21 +557,21 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Buttons")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.buttons"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Button##Col", (float*)&style.Colors[ImGuiCol_Button])) {
+                        if (ImGui::ColorEdit4((tr("appearance.button") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_Button])) {
                             g_config.appearance.customColors["Button"] = {style.Colors[ImGuiCol_Button].x, style.Colors[ImGuiCol_Button].y, style.Colors[ImGuiCol_Button].z, style.Colors[ImGuiCol_Button].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Button Hovered##Col", (float*)&style.Colors[ImGuiCol_ButtonHovered])) {
+                        if (ImGui::ColorEdit4((tr("appearance.button_hovered") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ButtonHovered])) {
                             g_config.appearance.customColors["ButtonHovered"] = {style.Colors[ImGuiCol_ButtonHovered].x, style.Colors[ImGuiCol_ButtonHovered].y, style.Colors[ImGuiCol_ButtonHovered].z, style.Colors[ImGuiCol_ButtonHovered].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Button Active##Col", (float*)&style.Colors[ImGuiCol_ButtonActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.button_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ButtonActive])) {
                             g_config.appearance.customColors["ButtonActive"] = {style.Colors[ImGuiCol_ButtonActive].x, style.Colors[ImGuiCol_ButtonActive].y, style.Colors[ImGuiCol_ButtonActive].z, style.Colors[ImGuiCol_ButtonActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -580,21 +580,21 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Headers")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.headers"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Header##Col", (float*)&style.Colors[ImGuiCol_Header])) {
+                        if (ImGui::ColorEdit4((tr("appearance.header") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_Header])) {
                             g_config.appearance.customColors["Header"] = {style.Colors[ImGuiCol_Header].x, style.Colors[ImGuiCol_Header].y, style.Colors[ImGuiCol_Header].z, style.Colors[ImGuiCol_Header].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Header Hovered##Col", (float*)&style.Colors[ImGuiCol_HeaderHovered])) {
+                        if (ImGui::ColorEdit4((tr("appearance.header_hovered") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_HeaderHovered])) {
                             g_config.appearance.customColors["HeaderHovered"] = {style.Colors[ImGuiCol_HeaderHovered].x, style.Colors[ImGuiCol_HeaderHovered].y, style.Colors[ImGuiCol_HeaderHovered].z, style.Colors[ImGuiCol_HeaderHovered].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Header Active##Col", (float*)&style.Colors[ImGuiCol_HeaderActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.header_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_HeaderActive])) {
                             g_config.appearance.customColors["HeaderActive"] = {style.Colors[ImGuiCol_HeaderActive].x, style.Colors[ImGuiCol_HeaderActive].y, style.Colors[ImGuiCol_HeaderActive].z, style.Colors[ImGuiCol_HeaderActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -603,21 +603,21 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Tabs")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.tabs"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Tab##Col", (float*)&style.Colors[ImGuiCol_Tab])) {
+                        if (ImGui::ColorEdit4((tr("appearance.tab") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_Tab])) {
                             g_config.appearance.customColors["Tab"] = {style.Colors[ImGuiCol_Tab].x, style.Colors[ImGuiCol_Tab].y, style.Colors[ImGuiCol_Tab].z, style.Colors[ImGuiCol_Tab].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Tab Hovered##Col", (float*)&style.Colors[ImGuiCol_TabHovered])) {
+                        if (ImGui::ColorEdit4((tr("appearance.tab_hovered") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_TabHovered])) {
                             g_config.appearance.customColors["TabHovered"] = {style.Colors[ImGuiCol_TabHovered].x, style.Colors[ImGuiCol_TabHovered].y, style.Colors[ImGuiCol_TabHovered].z, style.Colors[ImGuiCol_TabHovered].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Tab Selected##Col", (float*)&style.Colors[ImGuiCol_TabSelected])) {
+                        if (ImGui::ColorEdit4((tr("appearance.tab_selected") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_TabSelected])) {
                             g_config.appearance.customColors["TabSelected"] = {style.Colors[ImGuiCol_TabSelected].x, style.Colors[ImGuiCol_TabSelected].y, style.Colors[ImGuiCol_TabSelected].z, style.Colors[ImGuiCol_TabSelected].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -626,39 +626,39 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Sliders & Scrollbars")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.sliders_scrollbars"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Slider Grab##Col", (float*)&style.Colors[ImGuiCol_SliderGrab])) {
+                        if (ImGui::ColorEdit4((tr("appearance.slider_grab") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_SliderGrab])) {
                             g_config.appearance.customColors["SliderGrab"] = {style.Colors[ImGuiCol_SliderGrab].x, style.Colors[ImGuiCol_SliderGrab].y, style.Colors[ImGuiCol_SliderGrab].z, style.Colors[ImGuiCol_SliderGrab].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Slider Grab Active##Col", (float*)&style.Colors[ImGuiCol_SliderGrabActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.slider_grab_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_SliderGrabActive])) {
                             g_config.appearance.customColors["SliderGrabActive"] = {style.Colors[ImGuiCol_SliderGrabActive].x, style.Colors[ImGuiCol_SliderGrabActive].y, style.Colors[ImGuiCol_SliderGrabActive].z, style.Colors[ImGuiCol_SliderGrabActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Scrollbar Background##Col", (float*)&style.Colors[ImGuiCol_ScrollbarBg])) {
+                        if (ImGui::ColorEdit4((tr("appearance.scrollbar_bg") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ScrollbarBg])) {
                             g_config.appearance.customColors["ScrollbarBg"] = {style.Colors[ImGuiCol_ScrollbarBg].x, style.Colors[ImGuiCol_ScrollbarBg].y, style.Colors[ImGuiCol_ScrollbarBg].z, style.Colors[ImGuiCol_ScrollbarBg].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Scrollbar Grab##Col", (float*)&style.Colors[ImGuiCol_ScrollbarGrab])) {
+                        if (ImGui::ColorEdit4((tr("appearance.scrollbar_grab") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ScrollbarGrab])) {
                             g_config.appearance.customColors["ScrollbarGrab"] = {style.Colors[ImGuiCol_ScrollbarGrab].x, style.Colors[ImGuiCol_ScrollbarGrab].y, style.Colors[ImGuiCol_ScrollbarGrab].z, style.Colors[ImGuiCol_ScrollbarGrab].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Scrollbar Grab Hovered##Col", (float*)&style.Colors[ImGuiCol_ScrollbarGrabHovered])) {
+                        if (ImGui::ColorEdit4((tr("appearance.scrollbar_grab_hovered") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ScrollbarGrabHovered])) {
                             g_config.appearance.customColors["ScrollbarGrabHovered"] = {style.Colors[ImGuiCol_ScrollbarGrabHovered].x, style.Colors[ImGuiCol_ScrollbarGrabHovered].y, style.Colors[ImGuiCol_ScrollbarGrabHovered].z, style.Colors[ImGuiCol_ScrollbarGrabHovered].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Scrollbar Grab Active##Col", (float*)&style.Colors[ImGuiCol_ScrollbarGrabActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.scrollbar_grab_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ScrollbarGrabActive])) {
                             g_config.appearance.customColors["ScrollbarGrabActive"] = {style.Colors[ImGuiCol_ScrollbarGrabActive].x, style.Colors[ImGuiCol_ScrollbarGrabActive].y, style.Colors[ImGuiCol_ScrollbarGrabActive].z, style.Colors[ImGuiCol_ScrollbarGrabActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -667,15 +667,15 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Checkboxes & Selections")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.checkboxes_selections"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Check Mark##Col", (float*)&style.Colors[ImGuiCol_CheckMark])) {
+                        if (ImGui::ColorEdit4((tr("appearance.check_mark") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_CheckMark])) {
                             g_config.appearance.customColors["CheckMark"] = {style.Colors[ImGuiCol_CheckMark].x, style.Colors[ImGuiCol_CheckMark].y, style.Colors[ImGuiCol_CheckMark].z, style.Colors[ImGuiCol_CheckMark].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Text Selected Background##Col", (float*)&style.Colors[ImGuiCol_TextSelectedBg])) {
+                        if (ImGui::ColorEdit4((tr("appearance.text_selected_bg") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_TextSelectedBg])) {
                             g_config.appearance.customColors["TextSelectedBg"] = {style.Colors[ImGuiCol_TextSelectedBg].x, style.Colors[ImGuiCol_TextSelectedBg].y, style.Colors[ImGuiCol_TextSelectedBg].z, style.Colors[ImGuiCol_TextSelectedBg].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -684,39 +684,39 @@
                         ImGui::Unindent();
                     }
 
-                    if (ImGui::CollapsingHeader("Separators & Resize Grips")) {
+                    if (ImGui::CollapsingHeader(trc("appearance.separators_resize_grips"))) {
                         ImGui::Indent();
-                        if (ImGui::ColorEdit4("Separator##Col", (float*)&style.Colors[ImGuiCol_Separator])) {
+                        if (ImGui::ColorEdit4((tr("appearance.separator") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_Separator])) {
                             g_config.appearance.customColors["Separator"] = {style.Colors[ImGuiCol_Separator].x, style.Colors[ImGuiCol_Separator].y, style.Colors[ImGuiCol_Separator].z, style.Colors[ImGuiCol_Separator].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Separator Hovered##Col", (float*)&style.Colors[ImGuiCol_SeparatorHovered])) {
+                        if (ImGui::ColorEdit4((tr("appearance.separator_hovered") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_SeparatorHovered])) {
                             g_config.appearance.customColors["SeparatorHovered"] = {style.Colors[ImGuiCol_SeparatorHovered].x, style.Colors[ImGuiCol_SeparatorHovered].y, style.Colors[ImGuiCol_SeparatorHovered].z, style.Colors[ImGuiCol_SeparatorHovered].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Separator Active##Col", (float*)&style.Colors[ImGuiCol_SeparatorActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.separator_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_SeparatorActive])) {
                             g_config.appearance.customColors["SeparatorActive"] = {style.Colors[ImGuiCol_SeparatorActive].x, style.Colors[ImGuiCol_SeparatorActive].y, style.Colors[ImGuiCol_SeparatorActive].z, style.Colors[ImGuiCol_SeparatorActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Resize Grip##Col", (float*)&style.Colors[ImGuiCol_ResizeGrip])) {
+                        if (ImGui::ColorEdit4((tr("appearance.resize_grip") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ResizeGrip])) {
                             g_config.appearance.customColors["ResizeGrip"] = {style.Colors[ImGuiCol_ResizeGrip].x, style.Colors[ImGuiCol_ResizeGrip].y, style.Colors[ImGuiCol_ResizeGrip].z, style.Colors[ImGuiCol_ResizeGrip].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Resize Grip Hovered##Col", (float*)&style.Colors[ImGuiCol_ResizeGripHovered])) {
+                        if (ImGui::ColorEdit4((tr("appearance.resize_grip_hovered") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ResizeGripHovered])) {
                             g_config.appearance.customColors["ResizeGripHovered"] = {style.Colors[ImGuiCol_ResizeGripHovered].x, style.Colors[ImGuiCol_ResizeGripHovered].y, style.Colors[ImGuiCol_ResizeGripHovered].z, style.Colors[ImGuiCol_ResizeGripHovered].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
                             SaveTheme();
                         }
-                        if (ImGui::ColorEdit4("Resize Grip Active##Col", (float*)&style.Colors[ImGuiCol_ResizeGripActive])) {
+                        if (ImGui::ColorEdit4((tr("appearance.resize_grip_active") + "##Col").c_str(), (float*)&style.Colors[ImGuiCol_ResizeGripActive])) {
                             g_config.appearance.customColors["ResizeGripActive"] = {style.Colors[ImGuiCol_ResizeGripActive].x, style.Colors[ImGuiCol_ResizeGripActive].y, style.Colors[ImGuiCol_ResizeGripActive].z, style.Colors[ImGuiCol_ResizeGripActive].w};
                             g_config.appearance.theme = "Custom";
                             g_configIsDirty = true;
@@ -730,7 +730,7 @@
 
                 ImGui::Spacing();
 
-                if (ImGui::Button("Reset to Default (Dark)")) {
+                if (ImGui::Button(trc("appearance.reset_to_default_dark"))) {
                     ImGui::StyleColorsDark();
                     g_config.appearance.theme = "Dark";
                     g_config.appearance.customColors.clear();
@@ -738,7 +738,7 @@
                     SaveTheme();
                 }
                 ImGui::SameLine();
-                HelpMarker("Reset all colors to the default dark theme.");
+                HelpMarker(trc("appearance.tooltip.reset_to_default_dark"));
 
                 ImGui::EndTabItem();
             }
