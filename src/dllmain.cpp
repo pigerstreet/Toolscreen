@@ -228,8 +228,8 @@ std::vector<DecodedImageData> g_decodedImagesQueue;
 std::mutex g_decodedImagesMutex;
 
 std::atomic<GLuint> g_cachedGameTextureId{ UINT_MAX };
-std::atomic<GLuint> g_pendingGameTextureIdCapture{ UINT_MAX };
-std::atomic<bool> g_pendingGameTextureIdRequest{ false };
+std::atomic<GLuint> g_lastTrackedGameTextureBindId{ UINT_MAX };
+std::atomic<DWORD> g_lastSwapBuffersThreadId{ 0 };
 
 std::atomic<HCURSOR> g_specialCursorHandle{ NULL };
 
@@ -244,7 +244,14 @@ void LoadConfig();
 void SaveConfig();
 void RenderSettingsGUI();
 void AttemptAggressiveGlViewportHook();
-GLuint CalculateGameTextureId();
+
+void InvalidateTrackedGameTextureId(bool clearSwapThread) {
+    g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
+    g_lastTrackedGameTextureBindId.store(UINT_MAX, std::memory_order_release);
+    if (clearSwapThread) {
+        g_lastSwapBuffersThreadId.store(0, std::memory_order_release);
+    }
+}
 
 
 bool SubclassGameWindow(HWND hwnd) {
@@ -263,9 +270,7 @@ bool SubclassGameWindow(HWND hwnd) {
         g_originalWndProc = NULL;
 
         g_minecraftHwnd.store(hwnd);
-        g_cachedGameTextureId.store(UINT_MAX);
-        g_pendingGameTextureIdCapture.store(UINT_MAX, std::memory_order_release);
-        g_pendingGameTextureIdRequest.store(false, std::memory_order_release);
+        InvalidateTrackedGameTextureId(false);
         g_hwndChanged.store(true);
     }
 
@@ -538,9 +543,6 @@ typedef void (APIENTRY* GLBINDTEXTUREPROC)(GLenum target, GLuint texture);
 GLBINDTEXTUREPROC oglBindTexture = NULL;
 GLBINDTEXTUREPROC g_oglBindTextureDriver = NULL;
 
-// Per-thread one-shot flag used to capture the first bind after a qualifying viewport hook.
-static thread_local bool g_captureGameTextureIdOnNextBind = false;
-
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     GLBINDTEXTUREPROC next = oglBindTexture ? oglBindTexture : g_oglBindTextureDriver;
     if (next) {
@@ -550,26 +552,27 @@ void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     glBindTexture(target, texture);
 }
 
-static inline void BindTextureHook_Impl(GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
-    if (g_captureGameTextureIdOnNextBind) {
-        g_captureGameTextureIdOnNextBind = false;
-        if (texture != 0) {
-            bool expectedRequest = true;
-            if (g_pendingGameTextureIdRequest.compare_exchange_strong(expectedRequest, false, std::memory_order_acq_rel)) {
-                g_pendingGameTextureIdCapture.store(texture, std::memory_order_release);
-            }
-        }
+static inline void BindTextureHook_Impl(const char* hookName, GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
+    const DWORD currentThreadId = GetCurrentThreadId();
+    const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
+    const bool isTexture2D = (target == GL_TEXTURE_2D);
+    const bool hasTextureId = (texture != 0);
+    const bool threadMatchesSwap = (lastSwapThreadId != 0) && (currentThreadId == lastSwapThreadId);
+
+    // only track valid 2D binds from the swapbuffers thread
+    if (isTexture2D && hasTextureId && threadMatchesSwap) {
+        g_lastTrackedGameTextureBindId.store(texture, std::memory_order_release);
     }
 
     if (next) next(target, texture);
 }
 
 void APIENTRY hkglBindTexture(GLenum target, GLuint texture) {
-    BindTextureHook_Impl(oglBindTexture, target, texture);
+    BindTextureHook_Impl("export", oglBindTexture, target, texture);
 }
 
 void APIENTRY hkglBindTexture_Driver(GLenum target, GLuint texture) {
-    BindTextureHook_Impl(g_oglBindTextureDriver, target, texture);
+    BindTextureHook_Impl("driver", g_oglBindTextureDriver, target, texture);
 }
 
 typedef void (*GLFWSETINPUTMODE)(void* window, int mode, int value);
@@ -777,10 +780,6 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
 
     lastViewportW = modeWidth;
     lastViewportH = modeHeight;
-
-    if (g_pendingGameTextureIdRequest.load(std::memory_order_acquire)) {
-        g_captureGameTextureIdOnNextBind = true;
-    }
 
     const int screenW = GetCachedWindowWidth();
     const int screenH = GetCachedWindowHeight();
@@ -1194,21 +1193,26 @@ static void AttemptHookGlBindTextureViaWgl() {
     }
 }
 
-GLuint CalculateGameTextureId() {
-    const GLuint capturedTex = g_pendingGameTextureIdCapture.exchange(UINT_MAX, std::memory_order_acq_rel);
-    if (capturedTex != UINT_MAX) {
-        return capturedTex;
-    }
-
-    const bool wasAlreadyRequested = g_pendingGameTextureIdRequest.exchange(true, std::memory_order_acq_rel);
-    return UINT_MAX;
-}
-
 static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
     if (!next) return FALSE;
 
     auto startTime = std::chrono::high_resolution_clock::now();
     _set_se_translator(SEHTranslator);
+
+    const GLuint trackedGameTextureId = g_lastTrackedGameTextureBindId.load(std::memory_order_acquire);
+    const DWORD currentSwapThreadId = GetCurrentThreadId();
+    const DWORD previousSwapThreadId = g_lastSwapBuffersThreadId.exchange(currentSwapThreadId, std::memory_order_acq_rel);
+    if (previousSwapThreadId != 0 && previousSwapThreadId != currentSwapThreadId) {
+        InvalidateTrackedGameTextureId(false);
+    }
+
+    {
+        PROFILE_SCOPE_CAT("Calculate Game Texture ID", "SwapBuffers");
+        const GLuint cachedGameTextureId = g_cachedGameTextureId.load(std::memory_order_acquire);
+        if (trackedGameTextureId != UINT_MAX && cachedGameTextureId != trackedGameTextureId) {
+            g_cachedGameTextureId.store(trackedGameTextureId, std::memory_order_release);
+        }
+    }
 
     try {
         if (!g_glewLoaded) {
@@ -1309,9 +1313,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     StartMirrorCaptureThread(currentContext);
                     StartObsHookThread();
 
-                    g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
-                    g_pendingGameTextureIdCapture.store(UINT_MAX, std::memory_order_release);
-                    g_pendingGameTextureIdRequest.store(false, std::memory_order_release);
+                    InvalidateTrackedGameTextureId(false);
                     g_lastSeenGameGLContext.store(currentContext, std::memory_order_release);
                 }
             } else {
@@ -1464,23 +1466,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         const bool hasWindowClientSize = (windowWidth > 0 && windowHeight > 0);
         const bool isWindowedPresentation =
             hasWindowClientSize && (windowWidth < (fullW - kFullscreenTolPx) || windowHeight < (fullH - kFullscreenTolPx));
-
-        if (g_cachedGameTextureId.load() == UINT_MAX) {
-            GLint gameTextureId = UINT_MAX;
-            {
-                PROFILE_SCOPE_CAT("Calculate Game Texture ID", "SwapBuffers");
-                gameTextureId = CalculateGameTextureId();
-            }
-            if (gameTextureId != UINT_MAX) {
-                g_cachedGameTextureId.store(gameTextureId);
-                Log("Calculated game texture ID: " + std::to_string(gameTextureId));
-            }
-            // This will retry next frame. We do NOT store UINT_MAX explicitly -
-            // render thread has (ready frame / safe read texture fallback) rather
-        }
-
-        // Note: Windows mouse speed application is now handled by the logic thread
-        // Note: Hotkey secondary mode reset on world exit is now handled by the logic thread
 
         if (isWindowedPresentation) {
             bool isPre113 = (g_gameVersion < GameVersion(1, 13, 0));
