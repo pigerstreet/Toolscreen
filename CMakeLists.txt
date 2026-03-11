@@ -21,7 +21,7 @@ set(TOOLSCREEN_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(TOOLSCREEN_GENERATED_VERSION_HEADER "${TOOLSCREEN_GENERATED_DIR}/version.h")
 file(MAKE_DIRECTORY "${TOOLSCREEN_GENERATED_DIR}")
 configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/version.h.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/common/version.h.in"
     "${TOOLSCREEN_GENERATED_VERSION_HEADER}"
     @ONLY
 )
@@ -213,24 +213,56 @@ toolscreen_enable_release_symbols(toolscreen_imgui)
 
 find_package(OpenGL REQUIRED)
 
-file(GLOB TOOLSCREEN_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-file(GLOB TOOLSCREEN_HEADERS CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/*.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/*.inl"
+set(TOOLSCREEN_MODULE_DIRS
+    bootstrap
+    common
+    config
+    features
+    gui
+    gui/tabs
+    hooks
+    platform
+    render
+    runtime
+    third_party
 )
+
+set(TOOLSCREEN_SOURCES)
+set(TOOLSCREEN_HEADERS)
+
+foreach(module_dir IN LISTS TOOLSCREEN_MODULE_DIRS)
+    file(GLOB module_sources CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/${module_dir}/*.cpp"
+    )
+    file(GLOB module_headers CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/${module_dir}/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/${module_dir}/*.inl"
+    )
+
+    list(APPEND TOOLSCREEN_SOURCES ${module_sources})
+    list(APPEND TOOLSCREEN_HEADERS ${module_headers})
+endforeach()
+
+list(REMOVE_DUPLICATES TOOLSCREEN_SOURCES)
+list(REMOVE_DUPLICATES TOOLSCREEN_HEADERS)
 
 add_library(${PROJECT_NAME} SHARED
     ${TOOLSCREEN_SOURCES}
     ${TOOLSCREEN_HEADERS}
     ${TOOLSCREEN_GENERATED_VERSION_HEADER}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/resource.rc
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/resource.rc
 )
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "Source Files" FILES
+    ${TOOLSCREEN_SOURCES}
+    ${TOOLSCREEN_HEADERS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/resource.rc
+)
+source_group("Generated Files" FILES ${TOOLSCREEN_GENERATED_VERSION_HEADER})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${TOOLSCREEN_GENERATED_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/gui
     ${nlohmann_json_SOURCE_DIR}/single_include
 )
 

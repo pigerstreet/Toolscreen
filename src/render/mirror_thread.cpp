@@ -1,10 +1,10 @@
 #include "mirror_thread.h"
-#include "gui.h"
-#include "logic_thread.h"
-#include "profiler.h"
+#include "gui/gui.h"
+#include "runtime/logic_thread.h"
+#include "common/profiler.h"
 #include "render.h"
 #include "shared_contexts.h"
-#include "utils.h"
+#include "common/utils.h"
 #include <algorithm>
 #include <condition_variable>
 #include <chrono>

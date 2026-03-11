@@ -1,16 +1,16 @@
 #include "render_thread.h"
-#include "fake_cursor.h"
-#include "gui.h"
-#include "imgui_input_queue.h"
+#include "features/fake_cursor.h"
+#include "gui/gui.h"
+#include "gui/imgui_input_queue.h"
 #include "mirror_thread.h"
 #include "obs_thread.h"
-#include "profiler.h"
+#include "common/profiler.h"
 #include "render.h"
 #include "shared_contexts.h"
-#include "stb_image.h"
-#include "utils.h"
-#include "virtual_camera.h"
-#include "window_overlay.h"
+#include "third_party/stb_image.h"
+#include "common/utils.h"
+#include "features/virtual_camera.h"
+#include "features/window_overlay.h"
 #include <unordered_map>
 #include <set>
 #include <thread>
@@ -21,7 +21,7 @@
 #include "imgui_impl_win32.h"
 #include "imgui.h"
 
-#include "logic_thread.h"
+#include "runtime/logic_thread.h"
 
 static std::thread g_renderThread;
 std::atomic<bool> g_renderThreadRunning{ false };

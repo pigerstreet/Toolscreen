@@ -1,5 +1,5 @@
 #include "shared_contexts.h"
-#include "utils.h"
+#include "common/utils.h"
 
 #include <GL/glew.h>
 #include <GL/wglew.h>

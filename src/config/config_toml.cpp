@@ -1,8 +1,8 @@
 #include "config_toml.h"
 #include "config_defaults.h"
-#include "gui.h"
-#include "logic_thread.h"
-#include "utils.h"
+#include "gui/gui.h"
+#include "runtime/logic_thread.h"
+#include "common/utils.h"
 
 #include <cmath>
 #include <filesystem>
@@ -2010,7 +2010,7 @@ bool LoadConfigFromTomlFile(const std::wstring& path, Config& config) {
 }
 
 
-#include "resource.h"
+#include "platform/resource.h"
 
 static std::string s_embeddedConfigCache;
 static bool s_embeddedConfigLoaded = false;

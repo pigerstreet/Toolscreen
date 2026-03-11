@@ -1,10 +1,10 @@
 #pragma once
 
 
-#include "toml.hpp"
+#include "third_party/toml.hpp"
 #include <string>
 
-#include "gui.h"
+#include "gui/gui.h"
 
 struct BackgroundConfig;
 struct MirrorCaptureConfig;

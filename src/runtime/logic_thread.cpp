@@ -1,10 +1,10 @@
 #include "logic_thread.h"
-#include "expression_parser.h"
-#include "gui.h"
-#include "mirror_thread.h"
-#include "profiler.h"
-#include "render.h"
-#include "utils.h"
+#include "common/expression_parser.h"
+#include "gui/gui.h"
+#include "render/mirror_thread.h"
+#include "common/profiler.h"
+#include "render/render.h"
+#include "common/utils.h"
 #include "version.h"
 #include <Windows.h>
 #include <thread>

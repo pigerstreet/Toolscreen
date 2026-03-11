@@ -1,7 +1,7 @@
 #include "obs_thread.h"
-#include "profiler.h"
+#include "common/profiler.h"
 #include "render_thread.h"
-#include "utils.h"
+#include "common/utils.h"
 #include <mutex>
 #include <thread>
 #include <vector>

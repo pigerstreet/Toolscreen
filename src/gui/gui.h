@@ -15,7 +15,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "config_defaults.h"
+#include "config/config_defaults.h"
 #include "imgui.h"
 #include "version.h"
 

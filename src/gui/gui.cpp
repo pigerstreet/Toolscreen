@@ -1,22 +1,22 @@
 ﻿#include "gui.h"
-#include "config_toml.h"
-#include "expression_parser.h"
-#include "fake_cursor.h"
+#include "config/config_toml.h"
+#include "common/expression_parser.h"
+#include "features/fake_cursor.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 #include "imgui_stdlib.h"
-#include "logic_thread.h"
-#include "mirror_thread.h"
-#include "profiler.h"
-#include "render.h"
-#include "render_thread.h"
-#include "resource.h"
+#include "runtime/logic_thread.h"
+#include "render/mirror_thread.h"
+#include "common/profiler.h"
+#include "render/render.h"
+#include "render/render_thread.h"
+#include "platform/resource.h"
 #include <nlohmann/json.hpp>
-#include "i18n.h"
-#include "stb_image.h"
-#include "utils.h"
-#include "virtual_camera.h"
-#include "window_overlay.h"
+#include "common/i18n.h"
+#include "third_party/stb_image.h"
+#include "common/utils.h"
+#include "features/virtual_camera.h"
+#include "features/window_overlay.h"
 
 #include <GL/glew.h>
 #include <ShlObj.h>
@@ -3438,28 +3438,28 @@ void RenderSettingsGUI() {
 
         if (g_config.basicModeEnabled) {
             if (ImGui::BeginTabBar("BasicSettingsTabs")) {
-#include "gui/tab_basic_general.inl"
-#include "gui/tab_basic_other.inl"
+#include "tabs/tab_basic_general.inl"
+#include "tabs/tab_basic_other.inl"
 
-#include "gui/tab_supporters.inl"
+#include "tabs/tab_supporters.inl"
 
                 ImGui::EndTabBar();
             }
         } else {
             if (ImGui::BeginTabBar("SettingsTabs")) {
-#include "gui/tab_modes.inl"
-#include "gui/tab_mirrors.inl"
-#include "gui/tab_images.inl"
-#include "gui/tab_window_overlays.inl"
-#include "gui/tab_hotkeys.inl"
-#include "gui/tab_inputs.inl"
-#include "gui/tab_settings.inl"
+#include "tabs/tab_modes.inl"
+#include "tabs/tab_mirrors.inl"
+#include "tabs/tab_images.inl"
+#include "tabs/tab_window_overlays.inl"
+#include "tabs/tab_hotkeys.inl"
+#include "tabs/tab_inputs.inl"
+#include "tabs/tab_settings.inl"
 
-#include "gui/tab_appearance.inl"
+#include "tabs/tab_appearance.inl"
 
-#include "gui/tab_misc.inl"
+#include "tabs/tab_misc.inl"
 
-#include "gui/tab_supporters.inl"
+#include "tabs/tab_supporters.inl"
 
                 ImGui::EndTabBar();
             }

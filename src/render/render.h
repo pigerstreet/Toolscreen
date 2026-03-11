@@ -14,7 +14,7 @@
 #include <vector>
 #include <windows.h>
 
-#include "gui.h"
+#include "gui/gui.h"
 #include "mirror_thread.h"
 
 #ifdef _DEBUG

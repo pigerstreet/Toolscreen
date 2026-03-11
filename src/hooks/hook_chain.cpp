@@ -1,7 +1,7 @@
 #include "hook_chain.h"
 
 #include "MinHook.h"
-#include "utils.h"
+#include "common/utils.h"
 
 #include <DbgHelp.h>
 #include <Psapi.h>

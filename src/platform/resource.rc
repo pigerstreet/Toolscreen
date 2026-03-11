@@ -23,9 +23,9 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 // RCDATA
 //
 
-IDR_DEFAULT_CONFIG     RCDATA                  "default.toml"
-IDR_TOAST1_PNG         RCDATA                  "toast1.png"
-IDR_TOAST2_PNG         RCDATA                  "toast2.png"
+IDR_DEFAULT_CONFIG     RCDATA                  "../config/default.toml"
+IDR_TOAST1_PNG         RCDATA                  "../toast1.png"
+IDR_TOAST2_PNG         RCDATA                  "../toast2.png"
 
 #endif    // English (United States) resources
 /////////////////////////////////////////////////////////////////////////////

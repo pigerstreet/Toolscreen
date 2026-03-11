@@ -1,16 +1,16 @@
 #pragma once
 
 
-#include "fake_cursor.h"
-#include "gui.h"
+#include "features/fake_cursor.h"
+#include "gui/gui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 #include "imgui_stdlib.h"
-#include "profiler.h"
-#include "render.h"
-#include "stb_image.h"
-#include "utils.h"
-#include "window_overlay.h"
+#include "common/profiler.h"
+#include "render/render.h"
+#include "third_party/stb_image.h"
+#include "common/utils.h"
+#include "features/window_overlay.h"
 #include <GL/glew.h>
 #include <Shlwapi.h>
 #include <algorithm>

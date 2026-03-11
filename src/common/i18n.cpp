@@ -1,6 +1,6 @@
 #include "i18n.h"
 
-#include "resource.h"
+#include "platform/resource.h"
 #include "utils.h"
 
 inline nlohmann::json                               g_langsJson;

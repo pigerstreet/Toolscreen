@@ -1,6 +1,6 @@
 #include "fake_cursor.h"
-#include "gui.h"
-#include "utils.h"
+#include "gui/gui.h"
+#include "common/utils.h"
 #include <filesystem>
 #include <shared_mutex>
 #include <string>

@@ -12,7 +12,7 @@
 #include <vector>
 
 // Need gui.h for Color and MirrorCaptureConfig used as value types in ThreadedMirrorConfig
-#include "gui.h"
+#include "gui/gui.h"
 
 struct MirrorInstance;
 

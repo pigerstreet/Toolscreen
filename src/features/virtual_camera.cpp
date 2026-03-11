@@ -1,5 +1,5 @@
 #include "virtual_camera.h"
-#include "utils.h"
+#include "common/utils.h"
 
 // Prevent Windows min/max macros from conflicting with std::min/std::max
 #ifndef NOMINMAX

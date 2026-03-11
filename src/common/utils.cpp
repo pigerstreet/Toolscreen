@@ -1,12 +1,12 @@
 #include "utils.h"
-#include "gui.h"
-#include "logic_thread.h"
-#include "mirror_thread.h"
+#include "gui/gui.h"
+#include "runtime/logic_thread.h"
+#include "render/mirror_thread.h"
 #include "profiler.h"
 
 extern std::atomic<GLuint> g_cachedGameTextureId;
 
-#include "stb_image.h"
+#include "third_party/stb_image.h"
 #include <DbgHelp.h>
 #include <ShlObj.h>
 #include <Shlwapi.h>

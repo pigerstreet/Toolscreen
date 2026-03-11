@@ -3,8 +3,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include "gui.h"
-#include "utils.h"
+#include "gui/gui.h"
+#include "common/utils.h"
 #include <atomic>
 #include <chrono>
 #include <map>

@@ -1,7 +1,7 @@
 
 #include "expression_parser.h"
-#include "gui.h"
-#include "logic_thread.h"
+#include "gui/gui.h"
+#include "runtime/logic_thread.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>

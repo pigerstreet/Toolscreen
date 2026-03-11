@@ -16,7 +16,7 @@
 #include <vector>
 #include <windows.h>
 
-#include "gui.h"
+#include "gui/gui.h"
 
 // Config access: Reader threads use GetConfigSnapshot() for safe, lock-free access.
 // g_config is the mutable draft, only touched by the GUI/main thread.
