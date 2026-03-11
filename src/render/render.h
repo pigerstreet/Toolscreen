@@ -70,11 +70,16 @@ struct SolidColorShaderLocs {
 };
 
 struct ImageRenderShaderLocs {
-    GLint imageTexture, enableColorKey, colorKey, sensitivity, opacity;
+    GLint imageTexture;
+    GLint enableColorKey;
+    GLint numColorKeys;
+    GLint colorKeys;
+    GLint sensitivities;
+    GLint opacity;
 };
 
 struct PassthroughShaderLocs {
-    GLint screenTexture, sourceRect;
+    GLint screenTexture, sourceRect, opacity;
 };
 
 #define MAX_GRADIENT_STOPS 8
@@ -102,9 +107,14 @@ struct GLState {
     GLboolean be;
     GLboolean de;
     GLboolean sc;
+    GLboolean ce;
+    GLboolean ste;
     GLboolean srgb_enabled;
+    GLboolean depth_mask;
 
     GLint blend_src_rgb, blend_dst_rgb, blend_src_alpha, blend_dst_alpha;
+    GLint draw_buffer;
+    GLint read_buffer;
 
     GLint vp[4];
     GLint sb[4];
@@ -220,12 +230,17 @@ void RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, const GameVie
                    float modeOpacity = 1.0f, bool excludeOnlyOnMyScreen = false);
 void RenderImages(const std::vector<ImageConfig>& activeImages, int fullW, int fullH, float modeOpacity = 1.0f,
                   bool excludeOnlyOnMyScreen = false);
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
+                                  std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
+                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays);
 void RenderMode(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, bool skipAnimation = false,
                 bool excludeOnlyOnMyScreen = false);
 void RenderModeWithOpacity(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, float opacity,
                            bool skipBackgroundClear = false);
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO);
-void handleEyeZoomMode(const GLState& s, float opacity = 1.0f, int animatedViewportX = -1);
+void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fullW, int fullH, float opacity = 1.0f,
+                       int animatedViewportX = -1, bool useSnapshot = false, GLuint preferredGameTexture = 0,
+                       int preferredGameW = 0, int preferredGameH = 0);
 void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, float scaleFactor);
 void SetOverlayTextFontSize(int sizePixels);
 

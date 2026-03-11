@@ -17,6 +17,7 @@ std::atomic<bool> g_mirrorCaptureRunning{ false };
 static std::atomic<bool> g_mirrorCaptureShouldStop{ false };
 
 std::atomic<bool> g_safeToCapture{ false };
+std::atomic<bool> g_sameThreadMirrorPipelineActive{ false };
 
 // Updated by UpdateMirrorCaptureConfigs (logic thread) and read by SwapBuffers hook.
 std::atomic<int> g_activeMirrorCaptureCount{ 0 };
@@ -717,6 +718,12 @@ void InitCaptureTexture(int width, int height) {
                             std::to_string(height));
 }
 
+void EnsureCaptureTextureInitialized(int width, int height) {
+    if (width <= 0 || height <= 0) { return; }
+    if (g_copyFBO != 0 && g_copyTextures[0] != 0 && g_copyTextures[1] != 0) { return; }
+    InitCaptureTexture(width, height);
+}
+
 void CleanupCaptureTexture() {
     // Cleanup capture resources - call from capture thread or main thread with GL context current
     // Drain the lock-free queue and delete any remaining fences
@@ -884,14 +891,16 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-    // Create TWO fences AFTER blit commands - marks when blit is complete
-    // One for mirror thread (pushed to queue, mirror thread will delete it)
-    // One for render thread fallback (stored separately, render thread manages it)
-    GLsync fenceForMirrorThread = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    const bool sameThreadMirrorPipeline = g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire);
+
+    // Create synchronization fences after the blit commands.
+    // The render-thread/consumer fence is always kept. The mirror-thread fence is only needed
+    // when the mirror thread is responsible for publishing ready frames.
+    GLsync fenceForMirrorThread = sameThreadMirrorPipeline ? nullptr : glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     GLsync fenceForRenderThread = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 
     // (glClientWaitSync/glWaitSync on a null/invalid fence can crash some drivers.)
-    if (!fenceForMirrorThread || !fenceForRenderThread) {
+    if ((!sameThreadMirrorPipeline && !fenceForMirrorThread) || !fenceForRenderThread) {
         if (fenceForMirrorThread && glIsSync(fenceForMirrorThread)) { glDeleteSync(fenceForMirrorThread); }
         if (fenceForRenderThread && glIsSync(fenceForRenderThread)) { glDeleteSync(fenceForRenderThread); }
         restoreState();
@@ -913,22 +922,28 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
     g_lastCopyHeight.store(height, std::memory_order_release);
     g_safeReadTextureValid.store(true, std::memory_order_release);
 
-    // Notify mirror thread (lock-free queue) - include texture index so mirror thread uses correct texture
-    FrameCaptureNotification notif = { 0, fenceForMirrorThread, width, height, writeIndex };
-    if (!CaptureQueuePush(notif)) {
-        // Queue full - delete the fence since mirror thread won't get it
-        if (glIsSync(fenceForMirrorThread)) { glDeleteSync(fenceForMirrorThread); }
+    if (sameThreadMirrorPipeline) {
+        g_readyFrameIndex.store(writeIndex, std::memory_order_release);
+        g_readyFrameWidth.store(width, std::memory_order_release);
+        g_readyFrameHeight.store(height, std::memory_order_release);
     } else {
-        // Wake mirror thread so it doesn't have to poll.
-        g_captureSignalCV.notify_one();
+        // Notify mirror thread (lock-free queue) - include texture index so mirror thread uses correct texture
+        FrameCaptureNotification notif = { 0, fenceForMirrorThread, width, height, writeIndex };
+        if (!CaptureQueuePush(notif)) {
+            // Queue full - delete the fence since mirror thread won't get it
+            if (glIsSync(fenceForMirrorThread)) { glDeleteSync(fenceForMirrorThread); }
+        } else {
+            // Wake mirror thread so it doesn't have to poll.
+            g_captureSignalCV.notify_one();
+        }
     }
 
     restoreState();
 }
 
 static void ComputeMirrorRenderCache(MirrorInstance* inst, const ThreadedMirrorConfig& conf, int gameW, int gameH, int screenW, int screenH,
-                                     int finalX, int finalY, int finalW, int finalH) {
-    auto& cache = inst->cachedRenderStateBack;
+                                     int finalX, int finalY, int finalW, int finalH, bool writeToBack) {
+    auto& cache = writeToBack ? inst->cachedRenderStateBack : inst->cachedRenderState;
 
     float scaleX = conf.outputSeparateScale ? conf.outputScaleX : conf.outputScale;
     float scaleY = conf.outputSeparateScale ? conf.outputScaleY : conf.outputScale;
@@ -989,12 +1004,17 @@ static void ComputeMirrorRenderCache(MirrorInstance* inst, const ThreadedMirrorC
     cache.isValid = true;
 }
 
-static bool RenderMirrorToBackBuffer(MirrorInstance* inst, const ThreadedMirrorConfig& conf, GLuint validCopyTexture, GLuint captureVAO,
-                                     GLuint captureVBO, GLuint captureBackFbo, GLuint captureFinalBackFbo, MirrorGammaMode gammaMode,
-                                     int gameW, int gameH) {
+static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfig& conf, GLuint validCopyTexture, GLuint captureVAO,
+                                 GLuint captureVBO, GLuint captureFbo, GLuint captureFinalFbo, MirrorGammaMode gammaMode, int gameW,
+                                 int gameH, bool writeToBack) {
     PROFILE_SCOPE_CAT("Capture Single Mirror", "Mirror Thread");
 
-    glBindFramebuffer(GL_FRAMEBUFFER, captureBackFbo);
+    const GLuint captureTexture = writeToBack ? inst->fboTextureBack : inst->fboTexture;
+    const GLuint finalTexture = writeToBack ? inst->finalTextureBack : inst->finalTexture;
+    const int finalW = writeToBack ? inst->final_w_back : inst->final_w;
+    const int finalH = writeToBack ? inst->final_h_back : inst->final_h;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, captureFbo);
     if (oglViewport)
         oglViewport(0, 0, inst->fbo_w, inst->fbo_h);
     else
@@ -1093,24 +1113,28 @@ static bool RenderMirrorToBackBuffer(MirrorInstance* inst, const ThreadedMirrorC
 
     // Uses async PBO readback: previous frame's result is harvested (non-blocking), then a
     if (useRawOutput) {
-        inst->hasFrameContentBack = true;
+        if (writeToBack) {
+            inst->hasFrameContentBack = true;
+        } else {
+            inst->hasFrameContent = true;
+        }
     }
 
     // This produces screen-ready content so render thread just needs to blit.
     // Use the mirror-thread-local FBO (framebuffer objects may not be shared across contexts).
-    if (captureFinalBackFbo != 0 && inst->finalTextureBack != 0) {
+    if (captureFinalFbo != 0 && finalTexture != 0) {
         PROFILE_SCOPE_CAT("Apply Border Shader", "Mirror Thread");
 
         if (useRawOutput) {
-            glBindFramebuffer(GL_FRAMEBUFFER, captureFinalBackFbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, captureFinalFbo);
             if (oglViewport)
-                oglViewport(0, 0, inst->final_w_back, inst->final_h_back);
+                oglViewport(0, 0, finalW, finalH);
             else
-                glViewport(0, 0, inst->final_w_back, inst->final_h_back);
+                glViewport(0, 0, finalW, finalH);
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            BindTextureDirect(GL_TEXTURE_2D, inst->fboTextureBack);
+            BindTextureDirect(GL_TEXTURE_2D, captureTexture);
             glUseProgram(mt_backgroundProgram);
             glUniform1i(mt_backgroundShaderLocs.backgroundTexture, 0);
             glUniform1f(mt_backgroundShaderLocs.opacity, 1.0f);
@@ -1120,15 +1144,15 @@ static bool RenderMirrorToBackBuffer(MirrorInstance* inst, const ThreadedMirrorC
             glDrawArrays(GL_TRIANGLES, 0, 6);
         } else if (conf.borderType == MirrorBorderType::Static) {
             // Static border will be rendered later in render_thread.cpp on top of the mirror
-            glBindFramebuffer(GL_FRAMEBUFFER, captureFinalBackFbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, captureFinalFbo);
             if (oglViewport)
-                oglViewport(0, 0, inst->final_w_back, inst->final_h_back);
+                oglViewport(0, 0, finalW, finalH);
             else
-                glViewport(0, 0, inst->final_w_back, inst->final_h_back);
+                glViewport(0, 0, finalW, finalH);
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            BindTextureDirect(GL_TEXTURE_2D, inst->fboTextureBack);
+            BindTextureDirect(GL_TEXTURE_2D, captureTexture);
             glUseProgram(mt_backgroundProgram);
             glUniform1i(mt_backgroundShaderLocs.backgroundTexture, 0);
             glUniform1f(mt_backgroundShaderLocs.opacity, 1.0f);
@@ -1137,21 +1161,21 @@ static bool RenderMirrorToBackBuffer(MirrorInstance* inst, const ThreadedMirrorC
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(fullscreenVerts), fullscreenVerts);
             glDrawArrays(GL_TRIANGLES, 0, 6);
         } else {
-            glBindFramebuffer(GL_FRAMEBUFFER, captureFinalBackFbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, captureFinalFbo);
             if (oglViewport)
-                oglViewport(0, 0, inst->final_w_back, inst->final_h_back);
+                oglViewport(0, 0, finalW, finalH);
             else
-                glViewport(0, 0, inst->final_w_back, inst->final_h_back);
+                glViewport(0, 0, finalW, finalH);
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            BindTextureDirect(GL_TEXTURE_2D, inst->fboTextureBack);
+            BindTextureDirect(GL_TEXTURE_2D, captureTexture);
             if (useColorPassthrough) {
                 glUseProgram(mt_renderPassthroughProgram);
                 glUniform1i(mt_renderPassthroughShaderLocs.borderWidth, conf.dynamicBorderThickness);
                 glUniform4f(mt_renderPassthroughShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g, conf.borderColor.b,
                             conf.borderColor.a);
-                glUniform2f(mt_renderPassthroughShaderLocs.screenPixel, 1.0f / inst->final_w_back, 1.0f / inst->final_h_back);
+                glUniform2f(mt_renderPassthroughShaderLocs.screenPixel, 1.0f / finalW, 1.0f / finalH);
             } else {
                 glUseProgram(mt_renderProgram);
                 glUniform1i(mt_renderShaderLocs.borderWidth, conf.dynamicBorderThickness);
@@ -1159,7 +1183,7 @@ static bool RenderMirrorToBackBuffer(MirrorInstance* inst, const ThreadedMirrorC
                             conf.outputColor.a);
                 glUniform4f(mt_renderShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g, conf.borderColor.b,
                             conf.borderColor.a);
-                glUniform2f(mt_renderShaderLocs.screenPixel, 1.0f / inst->final_w_back, 1.0f / inst->final_h_back);
+                glUniform2f(mt_renderShaderLocs.screenPixel, 1.0f / finalW, 1.0f / finalH);
             }
 
             static const float fullscreenVerts[] = { -1, -1, 0, 0, 1, -1, 1, 0, 1, 1, 1, 1, -1, -1, 0, 0, 1, 1, 1, 1, -1, 1, 0, 1 };
@@ -1194,6 +1218,60 @@ struct MT_MirrorFbos {
     int contentDownW = 0;
     int contentDownH = 0;
 };
+
+static std::unordered_map<std::string, MT_MirrorFbos> g_sameThreadMirrorFbos;
+static GLuint g_sameThreadCaptureVAO = 0;
+static GLuint g_sameThreadCaptureVBO = 0;
+
+static void EnsureSameThreadMirrorCaptureResources() {
+    if (g_sameThreadCaptureVAO != 0 && g_sameThreadCaptureVBO != 0) { return; }
+
+    glGenVertexArrays(1, &g_sameThreadCaptureVAO);
+    glGenBuffers(1, &g_sameThreadCaptureVBO);
+    glBindVertexArray(g_sameThreadCaptureVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, g_sameThreadCaptureVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 24, nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    static const float verts[] = { -1, -1, 0, 0, 1, -1, 1, 0, 1, 1, 1, 1, -1, -1, 0, 0, 1, 1, 1, 1, -1, 1, 0, 1 };
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+}
+
+static ThreadedMirrorConfig BuildThreadedMirrorConfig(const MirrorConfig& mirror) {
+    ThreadedMirrorConfig conf;
+    conf.name = mirror.name;
+    conf.captureWidth = mirror.captureWidth;
+    conf.captureHeight = mirror.captureHeight;
+    conf.borderType = mirror.border.type;
+    conf.dynamicBorderThickness = mirror.border.dynamicThickness;
+    conf.staticBorderShape = mirror.border.staticShape;
+    conf.staticBorderColor = mirror.border.staticColor;
+    conf.staticBorderThickness = mirror.border.staticThickness;
+    conf.staticBorderRadius = mirror.border.staticRadius;
+    conf.staticBorderOffsetX = mirror.border.staticOffsetX;
+    conf.staticBorderOffsetY = mirror.border.staticOffsetY;
+    conf.staticBorderWidth = mirror.border.staticWidth;
+    conf.staticBorderHeight = mirror.border.staticHeight;
+    conf.fps = mirror.fps;
+    conf.rawOutput = mirror.rawOutput;
+    conf.colorPassthrough = mirror.colorPassthrough;
+    conf.targetColors = mirror.colors.targetColors;
+    conf.outputColor = mirror.colors.output;
+    conf.borderColor = mirror.colors.border;
+    conf.colorSensitivity = mirror.colorSensitivity;
+    conf.input = mirror.input;
+    conf.outputScale = mirror.output.scale;
+    conf.outputSeparateScale = mirror.output.separateScale;
+    conf.outputScaleX = mirror.output.scaleX;
+    conf.outputScaleY = mirror.output.scaleY;
+    conf.outputX = mirror.output.x;
+    conf.outputY = mirror.output.y;
+    conf.outputRelativeTo = mirror.output.relativeTo;
+    return conf;
+}
 
 static void MirrorCaptureThreadFunc(void* unused) {
     _set_se_translator(SEHTranslator);
@@ -1603,8 +1681,8 @@ static void MirrorCaptureThreadFunc(void* unused) {
 
                 debugSamplePixel(conf, validTexture, gameW, gameH);
 
-                RenderMirrorToBackBuffer(inst, conf, validTexture, captureVAO, captureVBO, localBackFbo, localFinalBackFbo, gammaMode, gameW,
-                                         gameH);
+                RenderMirrorToBuffer(inst, conf, validTexture, captureVAO, captureVBO, localBackFbo, localFinalBackFbo, gammaMode, gameW,
+                                     gameH, true);
 
                 // The result will be harvested on the NEXT frame (non-blocking).
                 if (!inst->desiredRawOutput.load(std::memory_order_acquire)) {
@@ -1679,7 +1757,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
                 int finalH = g_captureFinalH.load(std::memory_order_acquire);
 
                 if (screenW > 0 && screenH > 0) {
-                    ComputeMirrorRenderCache(inst, conf, gameW, gameH, screenW, screenH, finalX, finalY, finalW, finalH);
+                    ComputeMirrorRenderCache(inst, conf, gameW, gameH, screenW, screenH, finalX, finalY, finalW, finalH, true);
                 }
 
                 inst->capturedAsRawOutputBack = inst->desiredRawOutput.load(std::memory_order_acquire);
@@ -1727,8 +1805,6 @@ static void MirrorCaptureThreadFunc(void* unused) {
         }
         mt_fbos.clear();
 
-        CleanupCaptureTexture();
-
         wglMakeCurrent(NULL, NULL);
         if (g_mirrorCaptureContext) {
             if (!g_mirrorContextIsShared) { wglDeleteContext(g_mirrorCaptureContext); }
@@ -1752,6 +1828,14 @@ static void MirrorCaptureThreadFunc(void* unused) {
 // Start the mirror capture thread (call from main thread after GPU init)
 // MUST be called from main thread where game context is current
 void StartMirrorCaptureThread(void* gameGLContext) {
+    if (g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire)) {
+        if (g_mirrorCaptureRunning.load(std::memory_order_acquire) || g_mirrorCaptureThread.joinable()) {
+            StopMirrorCaptureThread();
+        }
+        Log("Mirror Capture Thread: Start skipped while same-thread render pipeline is enabled");
+        return;
+    }
+
     // If thread is already running, don't start another
     if (g_mirrorCaptureThread.joinable()) {
         if (g_mirrorCaptureRunning.load()) {
@@ -1912,33 +1996,137 @@ void StopMirrorCaptureThread() {
     }
 }
 
+static void SwapMirrorInstanceBuffers(MirrorInstance& inst, const std::chrono::steady_clock::time_point& updateTime) {
+    std::swap(inst.fbo, inst.fboBack);
+    std::swap(inst.fboTexture, inst.fboTextureBack);
+    std::swap(inst.capturedAsRawOutput, inst.capturedAsRawOutputBack);
+    std::swap(inst.cachedRenderState, inst.cachedRenderStateBack);
+    std::swap(inst.finalFbo, inst.finalFboBack);
+    std::swap(inst.finalTexture, inst.finalTextureBack);
+    std::swap(inst.final_w, inst.final_w_back);
+    std::swap(inst.final_h, inst.final_h_back);
+    std::swap(inst.hasFrameContent, inst.hasFrameContentBack);
+    std::swap(inst.gpuFence, inst.gpuFenceBack);
+
+    inst.hasValidContent = true;
+    inst.captureReady.store(false, std::memory_order_release);
+    inst.lastUpdateTime = updateTime;
+}
+
 // Call this from main render thread each frame
 // GPU fence synchronization ensures capture thread's work completes before render reads
 void SwapMirrorBuffers() {
     std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex); // Write lock - swapping buffers
+    auto now = std::chrono::steady_clock::now();
 
     for (auto& [name, inst] : g_mirrorInstances) {
         if (inst.captureReady.load(std::memory_order_acquire)) {
-            // Front becomes the new Back for capture thread to write to
-            // Back becomes the new Front for render thread to read from
-            std::swap(inst.fbo, inst.fboBack);
-            std::swap(inst.fboTexture, inst.fboTextureBack);
-            std::swap(inst.capturedAsRawOutput, inst.capturedAsRawOutputBack);
-            std::swap(inst.cachedRenderState, inst.cachedRenderStateBack);
-            std::swap(inst.finalFbo, inst.finalFboBack);
-            std::swap(inst.finalTexture, inst.finalTextureBack);
-            std::swap(inst.final_w, inst.final_w_back);
-            std::swap(inst.final_h, inst.final_h_back);
-            std::swap(inst.hasFrameContent, inst.hasFrameContentBack);
-            std::swap(inst.gpuFence, inst.gpuFenceBack);               // Swap fence with texture
-
-            inst.hasValidContent = true;
-
-            // Clear captureReady so capture thread can write to back again
-            inst.captureReady.store(false, std::memory_order_release);
-            inst.lastUpdateTime = std::chrono::steady_clock::now();
+            SwapMirrorInstanceBuffers(inst, now);
         }
     }
+}
+
+bool RenderMirrorCapturesOnCurrentThread(const std::vector<MirrorConfig>& activeMirrors, GLuint sourceTexture, int gameW, int gameH,
+                                         int screenW, int screenH, int finalX, int finalY, int finalW, int finalH) {
+    if (activeMirrors.empty() || sourceTexture == 0 || gameW <= 0 || gameH <= 0) { return false; }
+
+    if (mt_filterProgram == 0 || mt_renderProgram == 0 || mt_backgroundProgram == 0) {
+        if (!MT_InitializeShaders()) { return false; }
+    }
+    EnsureSameThreadMirrorCaptureResources();
+
+    MirrorGammaMode gammaMode = GetGlobalMirrorGammaMode();
+    bool renderedAny = false;
+
+    auto now = std::chrono::steady_clock::now();
+    std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+
+    for (const auto& mirror : activeMirrors) {
+        if (mirror.input.empty() || mirror.captureWidth <= 0 || mirror.captureHeight <= 0) { continue; }
+
+        auto it = g_mirrorInstances.find(mirror.name);
+        if (it == g_mirrorInstances.end()) { continue; }
+
+        MirrorInstance* inst = &it->second;
+        if (mirror.fps > 0 && inst->forceUpdateFrames <= 0) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - inst->lastUpdateTime).count();
+            if (elapsed < (1000 / mirror.fps)) { continue; }
+        }
+
+        ThreadedMirrorConfig conf = BuildThreadedMirrorConfig(mirror);
+        inst->desiredRawOutput.store(mirror.rawOutput, std::memory_order_relaxed);
+
+        int borderPadding = (conf.borderType == MirrorBorderType::Dynamic) ? conf.dynamicBorderThickness : 0;
+        int requiredFboW = conf.captureWidth + 2 * borderPadding;
+        int requiredFboH = conf.captureHeight + 2 * borderPadding;
+
+        if (inst->fbo_w != requiredFboW || inst->fbo_h != requiredFboH) {
+            inst->fbo_w = requiredFboW;
+            inst->fbo_h = requiredFboH;
+            inst->forceUpdateFrames = 3;
+            inst->cachedRenderState.isValid = false;
+
+            BindTextureDirect(GL_TEXTURE_2D, inst->fboTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, inst->fbo_w, inst->fbo_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            BindTextureDirect(GL_TEXTURE_2D, 0);
+        }
+
+        float finalScaleX = conf.outputSeparateScale ? conf.outputScaleX : conf.outputScale;
+        float finalScaleY = conf.outputSeparateScale ? conf.outputScaleY : conf.outputScale;
+        int requiredFinalW = static_cast<int>(inst->fbo_w * finalScaleX);
+        int requiredFinalH = static_cast<int>(inst->fbo_h * finalScaleY);
+        if (inst->final_w != requiredFinalW || inst->final_h != requiredFinalH) {
+            BindTextureDirect(GL_TEXTURE_2D, inst->finalTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, requiredFinalW, requiredFinalH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            BindTextureDirect(GL_TEXTURE_2D, 0);
+
+            inst->final_w = requiredFinalW;
+            inst->final_h = requiredFinalH;
+            inst->final_w_back = requiredFinalW;
+            inst->final_h_back = requiredFinalH;
+            inst->cachedRenderState.isValid = false;
+            inst->cachedRenderStateBack.isValid = false;
+        }
+
+        MT_MirrorFbos& fb = g_sameThreadMirrorFbos[mirror.name];
+        if (fb.backFbo == 0) { glGenFramebuffers(1, &fb.backFbo); }
+        if (fb.finalBackFbo == 0) { glGenFramebuffers(1, &fb.finalBackFbo); }
+
+        if (fb.lastBackTex != inst->fboTexture) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fb.backFbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, inst->fboTexture, 0);
+            fb.lastBackTex = inst->fboTexture;
+        }
+        if (fb.lastFinalBackTex != inst->finalTexture) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fb.finalBackFbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, inst->finalTexture, 0);
+            fb.lastFinalBackTex = inst->finalTexture;
+        }
+
+        RenderMirrorToBuffer(inst, conf, sourceTexture, g_sameThreadCaptureVAO, g_sameThreadCaptureVBO, fb.backFbo, fb.finalBackFbo,
+                             gammaMode, gameW, gameH, false);
+
+        inst->hasFrameContent = true;
+        ComputeMirrorRenderCache(inst, conf, gameW, gameH, screenW, screenH, finalX, finalY, finalW, finalH, false);
+        inst->capturedAsRawOutput = mirror.rawOutput;
+        if (inst->gpuFence && glIsSync(inst->gpuFence)) { glDeleteSync(inst->gpuFence); }
+        inst->gpuFence = nullptr;
+        inst->hasValidContent = true;
+        inst->captureReady.store(false, std::memory_order_release);
+        inst->lastUpdateTime = now;
+        if (inst->forceUpdateFrames > 0) { inst->forceUpdateFrames--; }
+        renderedAny = true;
+    }
+
+    return renderedAny;
 }
 
 // Update capture configs from main thread (call when active mirrors change)

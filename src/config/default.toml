@@ -39,6 +39,7 @@ enabled = false
 delayRenderingUntilBlitted = false
 delayRenderingUntilFinished = false
 fakeCursor = false
+sameThreadRenderPipeline = false
 logAnimation = false
 logFileMonitor = false
 logGui = false

@@ -156,6 +156,12 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
         if (ImGui::Checkbox(trc("settings.delay_rendering_until_blitted"), &g_config.debug.delayRenderingUntilBlitted)) { g_configIsDirty = true; }
         ImGui::SameLine();
         HelpMarker(trc("settings.tooltip.delay_rendering_until_blitted"));
+        if (ImGui::Checkbox(trc("settings.same_thread_render_pipeline"), &g_config.debug.sameThreadRenderPipeline)) {
+            g_sameThreadMirrorPipelineActive.store(g_config.debug.sameThreadRenderPipeline, std::memory_order_release);
+            g_configIsDirty = true;
+        }
+        ImGui::SameLine();
+        HelpMarker(trc("settings.tooltip.same_thread_render_pipeline"));
         ImGui::Spacing();
         if (ImGui::Checkbox(trc("settings.show_performance_overlay"), &g_config.debug.showPerformanceOverlay)) { g_configIsDirty = true; }
         if (ImGui::Checkbox(trc("settings.show_profiler"), &g_config.debug.showProfiler)) { g_configIsDirty = true; }

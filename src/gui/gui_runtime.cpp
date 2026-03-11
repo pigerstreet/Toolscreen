@@ -77,6 +77,9 @@ static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
     InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
 }
 
+static ImGuiContext* s_mainThreadImGuiContext = nullptr;
+static HWND s_mainThreadImGuiHwnd = NULL;
+
 float ComputeGuiScaleFactorFromCachedWindowSize() {
     int screenWidth = GetCachedWindowWidth();
     int screenHeight = GetCachedWindowHeight();
@@ -92,25 +95,40 @@ float ComputeGuiScaleFactorFromCachedWindowSize() {
 }
 
 void HandleImGuiContextReset() {
-    if (ImGui::GetCurrentContext()) {
+    if (s_mainThreadImGuiContext) {
+        ImGui::SetCurrentContext(s_mainThreadImGuiContext);
         Log("Performing deferred full ImGui context reset.");
         ClearSupporterTierTextureCache();
         g_keyboardLayoutPrimaryFont = nullptr;
         g_keyboardLayoutSecondaryFont = nullptr;
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
+        ImGui::DestroyContext(s_mainThreadImGuiContext);
+        s_mainThreadImGuiContext = nullptr;
+        s_mainThreadImGuiHwnd = NULL;
     }
 }
 
 void InitializeImGuiContext(HWND hwnd) {
-    if (ImGui::GetCurrentContext() == nullptr) {
+    if (s_mainThreadImGuiContext == nullptr) {
         Log("Re-creating ImGui context after full reset.");
         IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ConfigureImGuiFontsAndStyle(ComputeGuiScaleFactorFromCachedWindowSize());
+        s_mainThreadImGuiContext = ImGui::CreateContext();
+        ImGui::SetCurrentContext(s_mainThreadImGuiContext);
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         ImGui_ImplWin32_Init(hwnd);
         ImGui_ImplOpenGL3_Init("#version 330");
+        ConfigureImGuiFontsAndStyle(ComputeGuiScaleFactorFromCachedWindowSize());
+        s_mainThreadImGuiHwnd = hwnd;
+        return;
+    }
+
+    ImGui::SetCurrentContext(s_mainThreadImGuiContext);
+    if (hwnd != NULL && hwnd != s_mainThreadImGuiHwnd) {
+        ImGui_ImplWin32_Shutdown();
+        ImGui_ImplWin32_Init(hwnd);
+        s_mainThreadImGuiHwnd = hwnd;
     }
 }
 

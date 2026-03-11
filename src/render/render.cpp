@@ -6,13 +6,18 @@
 #include "obs_thread.h"
 #include "common/profiler.h"
 #include "render_thread.h"
+#include "gui/imgui_input_queue.h"
 #include "third_party/stb_image.h"
 #include "common/utils.h"
+#include "features/virtual_camera.h"
 #include "features/window_overlay.h"
+#include "imgui_impl_opengl3.h"
+#include "imgui_impl_win32.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <set>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -58,6 +63,129 @@ static void EnsureConfigCachesValid() {
     }
 }
 
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
+                                  std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
+                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays) {
+    outMirrors.clear();
+    outImages.clear();
+    outWindowOverlays.clear();
+
+    static uint64_t s_cachedConfigVersion = 0;
+    static std::unordered_map<std::string, const ModeConfig*> s_modeById;
+    static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
+    static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
+    static std::unordered_map<std::string, const ImageConfig*> s_imageByName;
+    static std::unordered_map<std::string, const WindowOverlayConfig*> s_windowOverlayByName;
+
+    if (s_cachedConfigVersion != configVersion) {
+        s_cachedConfigVersion = configVersion;
+        s_modeById.clear();
+        s_mirrorByName.clear();
+        s_groupByName.clear();
+        s_imageByName.clear();
+        s_windowOverlayByName.clear();
+
+        s_modeById.reserve(config.modes.size());
+        for (const auto& m : config.modes) { s_modeById[m.id] = &m; }
+
+        s_mirrorByName.reserve(config.mirrors.size());
+        for (const auto& m : config.mirrors) { s_mirrorByName[m.name] = &m; }
+
+        s_groupByName.reserve(config.mirrorGroups.size());
+        for (const auto& g : config.mirrorGroups) { s_groupByName[g.name] = &g; }
+
+        s_imageByName.reserve(config.images.size());
+        for (const auto& img : config.images) { s_imageByName[img.name] = &img; }
+
+        s_windowOverlayByName.reserve(config.windowOverlays.size());
+        for (const auto& overlay : config.windowOverlays) { s_windowOverlayByName[overlay.name] = &overlay; }
+    }
+
+    const ModeConfig* mode = nullptr;
+    if (auto it = s_modeById.find(modeId); it != s_modeById.end()) {
+        mode = it->second;
+    } else {
+        for (const auto& kv : s_modeById) {
+            if (EqualsIgnoreCase(kv.first, modeId)) {
+                mode = kv.second;
+                break;
+            }
+        }
+    }
+    if (!mode) return;
+
+    outMirrors.reserve(mode->mirrorIds.size() + mode->mirrorGroupIds.size());
+    outImages.reserve(mode->imageIds.size());
+    outWindowOverlays.reserve(mode->windowOverlayIds.size());
+
+    for (const auto& mirrorName : mode->mirrorIds) {
+        auto it = s_mirrorByName.find(mirrorName);
+        if (it == s_mirrorByName.end() || !it->second) continue;
+        const MirrorConfig& mirror = *it->second;
+        if (!onlyOnMyScreenPass || mirror.onlyOnMyScreen) { outMirrors.push_back(mirror); }
+    }
+
+    for (const auto& groupName : mode->mirrorGroupIds) {
+        auto git = s_groupByName.find(groupName);
+        if (git == s_groupByName.end() || !git->second) continue;
+        const auto& group = *git->second;
+
+        for (const auto& item : group.mirrors) {
+            if (!item.enabled) continue;
+
+            auto mit = s_mirrorByName.find(item.mirrorId);
+            if (mit == s_mirrorByName.end() || !mit->second) continue;
+
+            const auto& mirror = *mit->second;
+            if (onlyOnMyScreenPass && !mirror.onlyOnMyScreen) continue;
+
+            MirrorConfig groupedMirror = mirror;
+            int groupX = group.output.x;
+            int groupY = group.output.y;
+            if (group.output.useRelativePosition) {
+                int screenW = GetCachedWindowWidth();
+                int screenH = GetCachedWindowHeight();
+                groupX = static_cast<int>(group.output.relativeX * screenW);
+                groupY = static_cast<int>(group.output.relativeY * screenH);
+            }
+
+            groupedMirror.output.x = groupX + item.offsetX;
+            groupedMirror.output.y = groupY + item.offsetY;
+            groupedMirror.output.relativeTo = group.output.relativeTo;
+            groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
+            groupedMirror.output.relativeX = group.output.relativeX;
+            groupedMirror.output.relativeY = group.output.relativeY;
+            if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
+                groupedMirror.output.separateScale = true;
+                float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
+                float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
+                groupedMirror.output.scaleX = baseScaleX * item.widthPercent;
+                groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
+            }
+
+            outMirrors.push_back(groupedMirror);
+        }
+    }
+
+    if (g_imageOverlaysVisible.load(std::memory_order_acquire)) {
+        for (const auto& imageName : mode->imageIds) {
+            auto it = s_imageByName.find(imageName);
+            if (it == s_imageByName.end() || !it->second) continue;
+            const ImageConfig& image = *it->second;
+            if (!onlyOnMyScreenPass || image.onlyOnMyScreen) { outImages.push_back(image); }
+        }
+    }
+
+    if (g_windowOverlaysVisible.load(std::memory_order_acquire)) {
+        for (const auto& overlayId : mode->windowOverlayIds) {
+            auto it = s_windowOverlayByName.find(overlayId);
+            if (it == s_windowOverlayByName.end() || !it->second) continue;
+            const WindowOverlayConfig& overlay = *it->second;
+            if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outWindowOverlays.push_back(it->second); }
+        }
+    }
+}
+
 extern std::atomic<bool> g_graphicsHookDetected;
 
 GLuint g_filterProgram = 0;
@@ -67,6 +195,7 @@ GLuint g_solidColorProgram = 0;
 GLuint g_imageRenderProgram = 0;
 GLuint g_passthroughProgram = 0;
 GLuint g_gradientProgram = 0;
+static GLuint g_staticBorderProgram = 0;
 
 FilterShaderLocs g_filterShaderLocs;
 RenderShaderLocs g_renderShaderLocs;
@@ -75,6 +204,14 @@ SolidColorShaderLocs g_solidColorShaderLocs;
 ImageRenderShaderLocs g_imageRenderShaderLocs;
 PassthroughShaderLocs g_passthroughShaderLocs;
 GradientShaderLocs g_gradientShaderLocs;
+static struct {
+    GLint shape = -1;
+    GLint borderColor = -1;
+    GLint thickness = -1;
+    GLint radius = -1;
+    GLint size = -1;
+    GLint quadSize = -1;
+} g_staticBorderShaderLocs;
 
 std::atomic<bool> g_shouldRenderGui{ false };
 std::atomic<bool> g_showPerformanceOverlay{ false };
@@ -133,6 +270,17 @@ std::mutex g_geometryMutex;
 
 // Fence for async overlay blit - created after blit, waited on before SwapBuffers if setting enabled
 static std::atomic<GLsync> g_overlayBlitFence{ nullptr };
+
+static void PublishOverlayCompletionFence() {
+    GLsync oldFence = g_overlayBlitFence.exchange(nullptr, std::memory_order_acq_rel);
+    if (oldFence && glIsSync(oldFence)) { glDeleteSync(oldFence); }
+
+    GLsync newFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    g_overlayBlitFence.store(newFence, std::memory_order_release);
+
+    // Ensure the overlay commands and the completion fence are submitted before SwapBuffers.
+    glFlush();
+}
 
 std::string s_hoveredImageName = "";
 std::string s_draggedImageName = "";
@@ -502,10 +650,13 @@ const char* image_render_frag_shader = R"(#version 330 core
 out vec4 FragColor;
 in vec2 TexCoord;
 
+#define MAX_COLOR_KEYS 8
+
 uniform sampler2D imageTexture;
 uniform bool u_enableColorKey;
-uniform vec3 u_colorKey;
-uniform float u_sensitivity;
+uniform int u_numColorKeys;
+uniform vec3 u_colorKeys[MAX_COLOR_KEYS];
+uniform float u_sensitivities[MAX_COLOR_KEYS];
 uniform float u_opacity;
 
 void main() {
@@ -513,23 +664,74 @@ void main() {
 
     if (u_enableColorKey) {
         vec3 linearTexColor = pow(texColor.rgb, vec3(2.2));
-        vec3 linearKeyColor = pow(u_colorKey, vec3(2.2));
-        float dist = distance(linearTexColor, linearKeyColor);
-        if (dist < u_sensitivity) {
-            discard;
+        for (int i = 0; i < u_numColorKeys; i++) {
+            vec3 linearKeyColor = pow(u_colorKeys[i], vec3(2.2));
+            float dist = distance(linearTexColor, linearKeyColor);
+            if (dist < u_sensitivities[i]) {
+                discard;
+            }
         }
     }
     
     FragColor = vec4(texColor.rgb, texColor.a * u_opacity);
 })";
 
+const char* static_border_frag_shader = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoord;
+uniform int u_shape;
+uniform vec4 u_borderColor;
+uniform float u_thickness;
+uniform float u_radius;
+uniform vec2 u_size;
+uniform vec2 u_quadSize;
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    float maxR = min(b.x, b.y);
+    r = clamp(r, 0.0, maxR);
+    vec2 q = abs(p) - b + r;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+float sdEllipse(vec2 p, vec2 ab) {
+    vec2 pn = p / ab;
+    float len = length(pn);
+    if (len < 0.0001) return -min(ab.x, ab.y);
+
+    float d = len - 1.0;
+    vec2 grad = pn / (ab * len);
+    float gradLen = length(grad);
+    return d / gradLen;
+}
+
+void main() {
+    vec2 pixelPos = TexCoord * u_quadSize;
+    vec2 centeredPixelPos = pixelPos - u_quadSize * 0.5;
+    vec2 halfSize = max(u_size * 0.5, vec2(1.0, 1.0));
+
+    float dist;
+    if (u_shape == 0) {
+        dist = sdRoundedBox(centeredPixelPos, halfSize, u_radius);
+    } else {
+        dist = sdEllipse(centeredPixelPos, halfSize);
+    }
+
+    float epsilon = 0.5;
+    if (dist >= -epsilon && dist <= u_thickness + epsilon) {
+        FragColor = u_borderColor;
+    } else {
+        discard;
+    }
+})";
+
 const char* passthrough_frag_shader = R"(#version 330 core
 out vec4 FragColor;
 in vec2 TexCoord;
 uniform sampler2D screenTexture;
+uniform float u_opacity;
 
 void main() {
-    FragColor = texture(screenTexture, TexCoord);
+    FragColor = vec4(texture(screenTexture, TexCoord).rgb, u_opacity);
 })";
 
 const char* gradient_frag_shader = R"(#version 330 core
@@ -685,9 +887,10 @@ void InitializeShaders() {
     g_imageRenderProgram = CreateShaderProgram(passthrough_vert_shader, image_render_frag_shader);
     g_passthroughProgram = CreateShaderProgram(filter_vert_shader, passthrough_frag_shader);
     g_gradientProgram = CreateShaderProgram(passthrough_vert_shader, gradient_frag_shader);
+    g_staticBorderProgram = CreateShaderProgram(passthrough_vert_shader, static_border_frag_shader);
 
     if (!g_filterProgram || !g_renderProgram || !g_backgroundProgram || !g_solidColorProgram || !g_imageRenderProgram ||
-        !g_passthroughProgram || !g_gradientProgram) {
+        !g_passthroughProgram || !g_gradientProgram || !g_staticBorderProgram) {
         Log("FATAL: Failed to create one or more shader programs. Aborting shader initialization.");
         return;
     }
@@ -711,12 +914,21 @@ void InitializeShaders() {
 
     g_imageRenderShaderLocs.imageTexture = glGetUniformLocation(g_imageRenderProgram, "imageTexture");
     g_imageRenderShaderLocs.enableColorKey = glGetUniformLocation(g_imageRenderProgram, "u_enableColorKey");
-    g_imageRenderShaderLocs.colorKey = glGetUniformLocation(g_imageRenderProgram, "u_colorKey");
-    g_imageRenderShaderLocs.sensitivity = glGetUniformLocation(g_imageRenderProgram, "u_sensitivity");
+    g_imageRenderShaderLocs.numColorKeys = glGetUniformLocation(g_imageRenderProgram, "u_numColorKeys");
+    g_imageRenderShaderLocs.colorKeys = glGetUniformLocation(g_imageRenderProgram, "u_colorKeys");
+    g_imageRenderShaderLocs.sensitivities = glGetUniformLocation(g_imageRenderProgram, "u_sensitivities");
     g_imageRenderShaderLocs.opacity = glGetUniformLocation(g_imageRenderProgram, "u_opacity");
+
+    g_staticBorderShaderLocs.shape = glGetUniformLocation(g_staticBorderProgram, "u_shape");
+    g_staticBorderShaderLocs.borderColor = glGetUniformLocation(g_staticBorderProgram, "u_borderColor");
+    g_staticBorderShaderLocs.thickness = glGetUniformLocation(g_staticBorderProgram, "u_thickness");
+    g_staticBorderShaderLocs.radius = glGetUniformLocation(g_staticBorderProgram, "u_radius");
+    g_staticBorderShaderLocs.size = glGetUniformLocation(g_staticBorderProgram, "u_size");
+    g_staticBorderShaderLocs.quadSize = glGetUniformLocation(g_staticBorderProgram, "u_quadSize");
 
     g_passthroughShaderLocs.screenTexture = glGetUniformLocation(g_passthroughProgram, "screenTexture");
     g_passthroughShaderLocs.sourceRect = glGetUniformLocation(g_passthroughProgram, "u_sourceRect");
+    g_passthroughShaderLocs.opacity = glGetUniformLocation(g_passthroughProgram, "u_opacity");
 
     g_gradientShaderLocs.numStops = glGetUniformLocation(g_gradientProgram, "u_numStops");
     g_gradientShaderLocs.stopColors = glGetUniformLocation(g_gradientProgram, "u_stopColors");
@@ -736,11 +948,14 @@ void InitializeShaders() {
     glUseProgram(g_imageRenderProgram);
     glUniform1i(g_imageRenderShaderLocs.imageTexture, 0);
 
+    glUseProgram(g_staticBorderProgram);
+
     glUseProgram(g_filterProgram);
     glUniform1i(g_filterShaderLocs.screenTexture, 0);
 
     glUseProgram(g_passthroughProgram);
     glUniform1i(g_passthroughShaderLocs.screenTexture, 0);
+    glUniform1f(g_passthroughShaderLocs.opacity, 1.0f);
 
     glUseProgram(0);
 
@@ -774,6 +989,10 @@ void CleanupShaders() {
     if (g_gradientProgram) {
         glDeleteProgram(g_gradientProgram);
         g_gradientProgram = 0;
+    }
+    if (g_staticBorderProgram) {
+        glDeleteProgram(g_staticBorderProgram);
+        g_staticBorderProgram = 0;
     }
 }
 
@@ -840,12 +1059,17 @@ void SaveGLState(GLState* s) {
     s->be = glIsEnabled(GL_BLEND);
     s->de = glIsEnabled(GL_DEPTH_TEST);
     s->sc = glIsEnabled(GL_SCISSOR_TEST);
+    s->ce = glIsEnabled(GL_CULL_FACE);
+    s->ste = glIsEnabled(GL_STENCIL_TEST);
     s->srgb_enabled = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &s->depth_mask);
 
     glGetIntegerv(GL_BLEND_SRC_RGB, &s->blend_src_rgb);
     glGetIntegerv(GL_BLEND_DST_RGB, &s->blend_dst_rgb);
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &s->blend_src_alpha);
     glGetIntegerv(GL_BLEND_DST_ALPHA, &s->blend_dst_alpha);
+    glGetIntegerv(GL_DRAW_BUFFER, &s->draw_buffer);
+    glGetIntegerv(GL_READ_BUFFER, &s->read_buffer);
 
     glGetIntegerv(GL_VIEWPORT, &s->vp[0]);
     glGetIntegerv(GL_SCISSOR_BOX, s->sb);
@@ -888,12 +1112,23 @@ void RestoreGLState(const GLState& s) {
         glEnable(GL_SCISSOR_TEST);
     else
         glDisable(GL_SCISSOR_TEST);
+    if (s.ce)
+        glEnable(GL_CULL_FACE);
+    else
+        glDisable(GL_CULL_FACE);
+    if (s.ste)
+        glEnable(GL_STENCIL_TEST);
+    else
+        glDisable(GL_STENCIL_TEST);
     if (s.srgb_enabled)
         glEnable(GL_FRAMEBUFFER_SRGB);
     else
         glDisable(GL_FRAMEBUFFER_SRGB);
 
     glBlendFuncSeparate(s.blend_src_rgb, s.blend_dst_rgb, s.blend_src_alpha, s.blend_dst_alpha);
+    glDepthMask(s.depth_mask);
+    glDrawBuffer(s.draw_buffer);
+    glReadBuffer(s.read_buffer);
 
     if (oglViewport)
         oglViewport(s.vp[0], s.vp[1], s.vp[2], s.vp[3]);
@@ -911,12 +1146,35 @@ void RestoreGLState(const GLState& s) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, s.unpack_alignment);
 }
 
+static void PrepareSameThreadOverlayState(const GLState& s, int fullW, int fullH) {
+    glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
+    if (s.fb == 0) {
+        glDrawBuffer(s.draw_buffer);
+        glReadBuffer(s.read_buffer);
+    }
+
+    if (oglViewport)
+        oglViewport(0, 0, fullW, fullH);
+    else
+        glViewport(0, 0, fullW, fullH);
+
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glDepthMask(GL_FALSE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
 void CleanupGPUResources() {
     Log("CleanupGPUResources: Starting cleanup...");
 
     if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
         StopMirrorCaptureThread();
     }
+
+    CleanupCaptureTexture();
 
     HGLRC currentContext = wglGetCurrentContext();
     if (!currentContext) {
@@ -1337,6 +1595,113 @@ void InitializeGPUResources() {
     LogCategory("init", "--- GPU resources initialized successfully. ---");
 }
 
+static bool CreateMirrorFramebuffer(GLuint& fbo, GLuint& texture, int w, int h, GLenum filter) {
+    if (w <= 0 || h <= 0) { return false; }
+
+    if (fbo == 0) { glGenFramebuffers(1, &fbo); }
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    if (texture == 0) { glGenTextures(1, &texture); }
+    BindTextureDirect(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    return (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+}
+
+static void DeleteMirrorFramebuffer(GLuint& fbo, GLuint& texture) {
+    if (texture != 0) {
+        glDeleteTextures(1, &texture);
+        texture = 0;
+    }
+    if (fbo != 0) {
+        glDeleteFramebuffers(1, &fbo);
+        fbo = 0;
+    }
+}
+
+static bool EnsureMirrorAsyncGPUResources(MirrorInstance& inst) {
+    inst.final_w_back = inst.final_w;
+    inst.final_h_back = inst.final_h;
+
+    const bool frontBackReady = (inst.fboBack != 0 && inst.fboTextureBack != 0);
+    if (!frontBackReady) {
+        DeleteMirrorFramebuffer(inst.fboBack, inst.fboTextureBack);
+        if (!CreateMirrorFramebuffer(inst.fboBack, inst.fboTextureBack, inst.fbo_w, inst.fbo_h, GL_NEAREST)) {
+            DeleteMirrorFramebuffer(inst.fboBack, inst.fboTextureBack);
+            return false;
+        }
+    }
+
+    const bool finalBackReady = (inst.finalFboBack != 0 && inst.finalTextureBack != 0);
+    if (!finalBackReady) {
+        DeleteMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack);
+        if (!CreateMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack, inst.final_w_back, inst.final_h_back, GL_NEAREST)) {
+            DeleteMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack);
+            return false;
+        }
+    }
+
+    inst.cachedRenderStateBack.isValid = false;
+    return true;
+}
+
+static void ReleaseMirrorAsyncGPUResources(MirrorInstance& inst) {
+    DeleteMirrorFramebuffer(inst.fboBack, inst.fboTextureBack);
+    DeleteMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack);
+
+    if (inst.gpuFenceBack && glIsSync(inst.gpuFenceBack)) { glDeleteSync(inst.gpuFenceBack); }
+    inst.gpuFenceBack = nullptr;
+    inst.captureReady.store(false, std::memory_order_release);
+    inst.hasFrameContentBack = false;
+    inst.capturedAsRawOutputBack = false;
+    inst.final_w_back = inst.final_w;
+    inst.final_h_back = inst.final_h;
+    inst.cachedRenderStateBack.isValid = false;
+}
+
+static bool UpdateMirrorAsyncResourceMode(const std::vector<MirrorConfig>* activeMirrors, bool sameThreadRenderPipeline) {
+    GLint lastFramebuffer = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &lastFramebuffer);
+    GLint lastTexture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &lastTexture);
+
+    bool success = true;
+    {
+        std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+        if (sameThreadRenderPipeline) {
+            for (auto& [name, inst] : g_mirrorInstances) {
+                ReleaseMirrorAsyncGPUResources(inst);
+            }
+        } else if (activeMirrors != nullptr) {
+            for (const auto& mirror : *activeMirrors) {
+                auto it = g_mirrorInstances.find(mirror.name);
+                if (it == g_mirrorInstances.end()) { continue; }
+                if (!EnsureMirrorAsyncGPUResources(it->second)) {
+                    Log("ERROR: Failed to allocate async back buffers for mirror '" + mirror.name + "'");
+                    success = false;
+                    break;
+                }
+            }
+        } else {
+            for (auto& [name, inst] : g_mirrorInstances) {
+                if (!EnsureMirrorAsyncGPUResources(inst)) {
+                    Log("ERROR: Failed to allocate async back buffers for mirror '" + name + "'");
+                    success = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, lastFramebuffer);
+    BindTextureDirect(GL_TEXTURE_2D, lastTexture);
+    return success;
+}
+
 void CreateMirrorGPUResources(const MirrorConfig& conf) {
     PROFILE_SCOPE_CAT("Create Mirror GPU Resources", "GPU Operations");
 
@@ -1364,22 +1729,7 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
     inst.fbo_w = conf.captureWidth + 2 * padding;
     inst.fbo_h = conf.captureHeight + 2 * padding;
 
-    auto createFBO = [&](GLuint& fbo, GLuint& texture, int w, int h, GLenum filter) -> bool {
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glGenTextures(1, &texture);
-        BindTextureDirect(GL_TEXTURE_2D, texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-        return (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
-    };
-
-    bool frontComplete = createFBO(inst.fbo, inst.fboTexture, inst.fbo_w, inst.fbo_h, GL_NEAREST);
-    bool backComplete = createFBO(inst.fboBack, inst.fboTextureBack, inst.fbo_w, inst.fbo_h, GL_NEAREST);
+    bool frontComplete = CreateMirrorFramebuffer(inst.fbo, inst.fboTexture, inst.fbo_w, inst.fbo_h, GL_NEAREST);
 
     // Create final (screen-ready) FBOs - capture thread renders with borders here
     float scaleX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
@@ -1389,10 +1739,12 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
     inst.final_w_back = inst.final_w;
     inst.final_h_back = inst.final_h;
 
-    bool finalFrontComplete = createFBO(inst.finalFbo, inst.finalTexture, inst.final_w, inst.final_h, GL_NEAREST);
-    bool finalBackComplete = createFBO(inst.finalFboBack, inst.finalTextureBack, inst.final_w, inst.final_h, GL_NEAREST);
+    bool finalFrontComplete = CreateMirrorFramebuffer(inst.finalFbo, inst.finalTexture, inst.final_w, inst.final_h, GL_NEAREST);
+    const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
+    const bool needsAsyncBackBuffers = !sameThreadRenderPipeline;
+    const bool backComplete = !needsAsyncBackBuffers || EnsureMirrorAsyncGPUResources(inst);
 
-    if (frontComplete && backComplete && finalFrontComplete && finalBackComplete) {
+    if (frontComplete && finalFrontComplete && backComplete) {
         inst.captureReady.store(false, std::memory_order_relaxed);
         inst.hasValidContent = false;
         // Initialize rawOutput state from config for proper initial synchronization
@@ -1400,19 +1752,16 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
         inst.capturedAsRawOutput = conf.rawOutput;
         inst.capturedAsRawOutputBack = conf.rawOutput;
         g_mirrorInstances[conf.name] = inst;
-        LogCategory("init", "Created double-buffered GPU resources for mirror '" + conf.name + "' (FBO: " + std::to_string(inst.fbo) +
-                                ", Back: " + std::to_string(inst.fboBack) + ", FinalFBO: " + std::to_string(inst.finalFbo) + " [" +
+        const char* bufferingMode = needsAsyncBackBuffers ? "double-buffered" : "single-buffered";
+        LogCategory("init", "Created " + std::string(bufferingMode) + " GPU resources for mirror '" + conf.name + "' (FBO: " +
+                                std::to_string(inst.fbo) + ", FinalFBO: " + std::to_string(inst.finalFbo) + " [" +
                                 std::to_string(inst.final_w) + "x" + std::to_string(inst.final_h) + "])");
     } else {
         Log("ERROR: Failed to create complete framebuffers for mirror '" + conf.name + "'");
-        if (inst.fboTexture) glDeleteTextures(1, &inst.fboTexture);
-        if (inst.fbo) glDeleteFramebuffers(1, &inst.fbo);
-        if (inst.fboTextureBack) glDeleteTextures(1, &inst.fboTextureBack);
-        if (inst.fboBack) glDeleteFramebuffers(1, &inst.fboBack);
-        if (inst.finalTexture) glDeleteTextures(1, &inst.finalTexture);
-        if (inst.finalFbo) glDeleteFramebuffers(1, &inst.finalFbo);
-        if (inst.finalTextureBack) glDeleteTextures(1, &inst.finalTextureBack);
-        if (inst.finalFboBack) glDeleteFramebuffers(1, &inst.finalFboBack);
+        DeleteMirrorFramebuffer(inst.fbo, inst.fboTexture);
+        DeleteMirrorFramebuffer(inst.fboBack, inst.fboTextureBack);
+        DeleteMirrorFramebuffer(inst.finalFbo, inst.finalTexture);
+        DeleteMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, last_framebuffer);
@@ -1421,33 +1770,973 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
 
 // MirrorRenderData struct is now defined in render.h for sharing with render_thread.cpp
 
-// All overlay rendering is now done asynchronously via the render thread.
-// See RT_RenderMirrors() and RT_RenderImages() in render_thread.cpp
+static bool IsSampleableTexture2D(GLuint texture, int* outW = nullptr, int* outH = nullptr) {
+    if (outW) *outW = 0;
+    if (outH) *outH = 0;
+    if (texture == 0 || glIsTexture(texture) != GL_TRUE) { return false; }
 
-void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
-    PROFILE_SCOPE_CAT("EyeZoom Mode Rendering", "Rendering");
+    GLint prevTexture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTexture);
+    BindTextureDirect(GL_TEXTURE_2D, texture);
 
-    if (opacity <= 0.0f) { return; }
+    GLint texW = 0;
+    GLint texH = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &texW);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texH);
 
-    EyeZoomConfig zoomConfig;
-    {
-        auto ezSnap = GetConfigSnapshot();
-        if (ezSnap) { zoomConfig = ezSnap->eyezoom; }
+    BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(prevTexture));
+    if (outW) *outW = texW;
+    if (outH) *outH = texH;
+    return texW > 0 && texH > 0;
+}
+
+static void LogInvalidTextureSampleThrottled(const std::string& stage, GLuint texture, int expectedW = 0, int expectedH = 0) {
+    static std::unordered_map<std::string, ULONGLONG> s_lastLogByStage;
+    constexpr ULONGLONG kLogIntervalMs = 2000;
+
+    ULONGLONG now = GetTickCount64();
+    auto it = s_lastLogByStage.find(stage);
+    if (it != s_lastLogByStage.end() && (now - it->second) < kLogIntervalMs) { return; }
+    s_lastLogByStage[stage] = now;
+
+    int actualW = 0;
+    int actualH = 0;
+    bool valid = IsSampleableTexture2D(texture, &actualW, &actualH);
+
+    std::string expected;
+    if (expectedW > 0 && expectedH > 0) {
+        expected = " expected=" + std::to_string(expectedW) + "x" + std::to_string(expectedH);
     }
 
-    const int fullW = GetCachedWindowWidth();
-    const int fullH = GetCachedWindowHeight();
-    if (fullW <= 0 || fullH <= 0) { return; }
+    LogCategory("texture_ops", "Main Render: Invalid texture sample stage=" + stage + " tex=" + std::to_string(texture) +
+                                   " valid=" + std::to_string(valid ? 1 : 0) + " actual=" + std::to_string(actualW) + "x" +
+                                   std::to_string(actualH) + expected);
+}
 
-    bool useSnapshot = g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
+static void ClearEyeZoomTextLabels() {
+    std::lock_guard<std::mutex> lock(s_eyezoomTextMutex);
+    s_eyezoomTextLabels.clear();
+}
 
-    GLuint gameTextureToUse = g_cachedGameTextureId.load();
+static void RenderCachedEyeZoomTextLabels() {
+    std::vector<EyeZoomTextLabel> labels;
+    {
+        std::lock_guard<std::mutex> lock(s_eyezoomTextMutex);
+        if (s_eyezoomTextLabels.empty()) { return; }
+        labels.swap(s_eyezoomTextLabels);
+    }
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    float fontSize = ImGui::GetFontSize();
+
+    for (const auto& label : labels) {
+        const std::string text = std::to_string(label.number);
+        ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+        ImVec2 pos(label.centerX - textSize.x * 0.5f, label.centerY - textSize.y * 0.5f);
+        ImU32 color = IM_COL32(static_cast<int>(label.color.r * 255.0f), static_cast<int>(label.color.g * 255.0f),
+                               static_cast<int>(label.color.b * 255.0f), static_cast<int>(label.color.a * 255.0f));
+        drawList->AddText(font, fontSize, pos, color, text.c_str());
+    }
+}
+
+static bool SelectSameThreadGameTexture(GLuint preferredTexture, int preferredW, int preferredH, GLuint& outTexture, int& outW,
+                                        int& outH) {
+    if (preferredTexture != 0 && preferredTexture != UINT_MAX && preferredW > 0 && preferredH > 0 &&
+        IsSampleableTexture2D(preferredTexture)) {
+        outTexture = preferredTexture;
+        outW = preferredW;
+        outH = preferredH;
+        return true;
+    }
+
+    outTexture = GetReadyGameTexture();
+    outW = GetReadyGameWidth();
+    outH = GetReadyGameHeight();
+    if (outTexture != 0 && outW > 0 && outH > 0 && IsSampleableTexture2D(outTexture)) { return true; }
+
+    outTexture = GetFallbackGameTexture();
+    outW = GetFallbackGameWidth();
+    outH = GetFallbackGameHeight();
+    if (outTexture != 0 && outW > 0 && outH > 0 && IsSampleableTexture2D(outTexture)) { return true; }
+
+    outTexture = GetSafeReadTexture();
+    if (outTexture != 0 && IsSampleableTexture2D(outTexture, &outW, &outH)) { return true; }
+
+    outTexture = 0;
+    outW = 0;
+    outH = 0;
+    return false;
+}
+
+static void DrawPassthroughTextureRegion(GLuint textureId, const float sourceRect[4], int dstLeft, int dstBottom, int dstRight,
+                                         int dstTop, int fullW, int fullH, float opacity) {
+    if (textureId == 0 || dstRight <= dstLeft || dstTop <= dstBottom || fullW <= 0 || fullH <= 0) { return; }
+
+    glUseProgram(g_passthroughProgram);
+    BindTextureDirect(GL_TEXTURE_2D, textureId);
+    glUniform1i(g_passthroughShaderLocs.screenTexture, 0);
+    glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
+    glUniform1f(g_passthroughShaderLocs.opacity, opacity);
+
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+
+    float nx1 = (static_cast<float>(dstLeft) / fullW) * 2.0f - 1.0f;
+    float ny1 = (static_cast<float>(dstBottom) / fullH) * 2.0f - 1.0f;
+    float nx2 = (static_cast<float>(dstRight) / fullW) * 2.0f - 1.0f;
+    float ny2 = (static_cast<float>(dstTop) / fullH) * 2.0f - 1.0f;
+
+    float quad[] = {
+        nx1, ny1, 0, 0, nx2, ny1, 1, 0, nx2, ny2, 1, 1,
+        nx1, ny1, 0, 0, nx2, ny2, 1, 1, nx1, ny2, 0, 1,
+    };
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+static void AppendUniqueMirrorsByName(std::vector<MirrorConfig>& dest, const std::vector<MirrorConfig>& src) {
+    if (src.empty()) return;
+
+    std::unordered_set<std::string> seen;
+    seen.reserve(dest.size() + src.size());
+    for (const auto& mirror : dest) {
+        seen.insert(mirror.name);
+    }
+
+    for (const auto& mirror : src) {
+        if (seen.insert(mirror.name).second) {
+            dest.push_back(mirror);
+        }
+    }
+}
+
+static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, const GameViewportGeometry& geo, int fullW, int fullH,
+                                float modeOpacity, bool excludeOnlyOnMyScreen, bool relativeStretching, float transitionProgress,
+                                float mirrorSlideProgress, int fromX, int fromY, int fromW, int fromH, int toX, int toY, int toW,
+                                int toH, bool isEyeZoomMode, bool isTransitioningFromEyeZoom, int eyeZoomAnimatedViewportX,
+                                bool skipAnimation, const std::string& fromModeId, bool fromSlideMirrorsIn, bool toSlideMirrorsIn,
+                                bool isSlideOutPass, const Config& cfg) {
+    if (activeMirrors.empty()) return;
+
+    std::set<std::string> sourceMirrorNames;
+    if (!fromModeId.empty() && (fromSlideMirrorsIn || toSlideMirrorsIn || cfg.eyezoom.slideMirrorsIn)) {
+        for (const auto& mode : cfg.modes) {
+            if (EqualsIgnoreCase(mode.id, fromModeId)) {
+                for (const auto& mirrorName : mode.mirrorIds) { sourceMirrorNames.insert(mirrorName); }
+                for (const auto& groupName : mode.mirrorGroupIds) {
+                    for (const auto& group : cfg.mirrorGroups) {
+                        if (group.name == groupName) {
+                            for (const auto& item : group.mirrors) { sourceMirrorNames.insert(item.mirrorId); }
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    std::vector<MirrorRenderData> mirrorsToRender;
+    mirrorsToRender.reserve(activeMirrors.size());
+    std::vector<GLsync> pendingFences;
+
+    {
+        std::shared_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex);
+        for (const auto& conf : activeMirrors) {
+            if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
+
+            const float effectiveOpacity = modeOpacity * conf.opacity;
+            if (effectiveOpacity <= 0.0f) continue;
+
+            auto it = g_mirrorInstances.find(conf.name);
+            if (it == g_mirrorInstances.end()) continue;
+            const MirrorInstance& inst = it->second;
+            if (!inst.hasValidContent) continue;
+
+            MirrorRenderData data{};
+            data.config = &conf;
+            float scaleX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
+            float scaleY = conf.output.separateScale ? conf.output.scaleY : conf.output.scale;
+            if (inst.finalTexture != 0 && inst.final_w > 0 && inst.final_h > 0) {
+                data.texture = inst.finalTexture;
+                data.tex_w = inst.final_w;
+                data.tex_h = inst.final_h;
+            } else {
+                data.texture = inst.fboTexture;
+                data.tex_w = inst.fbo_w;
+                data.tex_h = inst.fbo_h;
+            }
+            data.outW = static_cast<int>(inst.fbo_w * scaleX);
+            data.outH = static_cast<int>(inst.fbo_h * scaleY);
+            data.hasFrameContent = inst.hasFrameContent;
+            data.gpuFence = inst.gpuFence;
+
+            const auto& cache = inst.cachedRenderState;
+            bool isAnimating = transitionProgress < 1.0f;
+            bool cacheMatchesCurrentGeo =
+                cache.isValid && !isAnimating && cache.finalX == geo.finalX && cache.finalY == geo.finalY && cache.finalW == geo.finalW &&
+                cache.finalH == geo.finalH && cache.screenW == fullW && cache.screenH == fullH && cache.outputX == conf.output.x &&
+                cache.outputY == conf.output.y && cache.outputScale == conf.output.scale &&
+                cache.outputSeparateScale == conf.output.separateScale && cache.outputScaleX == conf.output.scaleX &&
+                cache.outputScaleY == conf.output.scaleY && cache.outputRelativeTo == conf.output.relativeTo;
+            if (cacheMatchesCurrentGeo) {
+                memcpy(data.vertices, cache.vertices, sizeof(data.vertices));
+                data.screenX = cache.mirrorScreenX;
+                data.screenY = cache.mirrorScreenY;
+                data.screenW = cache.mirrorScreenW;
+                data.screenH = cache.mirrorScreenH;
+                data.cacheValid = true;
+            }
+
+            mirrorsToRender.push_back(data);
+            if (data.gpuFence) { pendingFences.push_back(data.gpuFence); }
+        }
+    }
+
+    for (GLsync fence : pendingFences) {
+        if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
+    }
+
+    if (mirrorsToRender.empty()) return;
+
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glActiveTexture(GL_TEXTURE0);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    glUseProgram(g_backgroundProgram);
+
+    for (auto& renderData : mirrorsToRender) {
+        const MirrorConfig& conf = *renderData.config;
+        const float effectiveOpacity = modeOpacity * conf.opacity;
+        if (effectiveOpacity <= 0.0f) continue;
+        if (!IsSampleableTexture2D(renderData.texture)) {
+            LogInvalidTextureSampleThrottled("mirror_texture:" + conf.name, renderData.texture, renderData.tex_w, renderData.tex_h);
+            continue;
+        }
+
+        glUniform1f(g_backgroundShaderLocs.opacity, effectiveOpacity);
+        BindTextureDirect(GL_TEXTURE_2D, renderData.texture);
+
+        if (renderData.cacheValid) {
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(renderData.vertices), renderData.vertices);
+        } else {
+            std::string anchor = conf.output.relativeTo;
+            bool isScreenRelative = false;
+            if (anchor.length() > 6 && anchor.substr(anchor.length() - 6) == "Screen") {
+                anchor = anchor.substr(0, anchor.length() - 6);
+                isScreenRelative = true;
+            } else if (anchor.length() > 8 && anchor.substr(anchor.length() - 8) == "Viewport") {
+                anchor = anchor.substr(0, anchor.length() - 8);
+            }
+
+            int finalXScreen = 0;
+            int finalYScreen = 0;
+            int finalWScreen = renderData.outW;
+            int finalHScreen = renderData.outH;
+
+            if (isScreenRelative) {
+                GetRelativeCoords(anchor, conf.output.x, conf.output.y, renderData.outW, renderData.outH, fullW, fullH, finalXScreen,
+                                  finalYScreen);
+            } else {
+                float toScaleX = (toW > 0 && geo.gameW > 0) ? static_cast<float>(toW) / geo.gameW : 1.0f;
+                float toScaleY = (toH > 0 && geo.gameH > 0) ? static_cast<float>(toH) / geo.gameH : 1.0f;
+                float fromScaleX = (fromW > 0 && geo.gameW > 0) ? static_cast<float>(fromW) / geo.gameW : toScaleX;
+                float fromScaleY = (fromH > 0 && geo.gameH > 0) ? static_cast<float>(fromH) / geo.gameH : toScaleY;
+
+                int toSizeW = relativeStretching ? static_cast<int>(renderData.outW * toScaleX) : renderData.outW;
+                int toSizeH = relativeStretching ? static_cast<int>(renderData.outH * toScaleY) : renderData.outH;
+                int fromSizeW = relativeStretching ? static_cast<int>(renderData.outW * fromScaleX) : renderData.outW;
+                int fromSizeH = relativeStretching ? static_cast<int>(renderData.outH * fromScaleY) : renderData.outH;
+
+                int toOutX = 0;
+                int toOutY = 0;
+                GetRelativeCoords(anchor, conf.output.x, conf.output.y, toSizeW, toSizeH, toW, toH, toOutX, toOutY);
+
+                int fromOutX = 0;
+                int fromOutY = 0;
+                int effectiveFromH = isTransitioningFromEyeZoom ? toH : fromH;
+                int effectiveFromY = isTransitioningFromEyeZoom ? toY : fromY;
+                int effectiveFromSizeH = isTransitioningFromEyeZoom ? toSizeH : fromSizeH;
+                GetRelativeCoords(anchor, conf.output.x, conf.output.y, fromSizeW, effectiveFromSizeH, fromW, effectiveFromH, fromOutX,
+                                  fromOutY);
+
+                int toPosX = toX + toOutX;
+                int toPosY = toY + toOutY;
+                int fromPosX = fromX + fromOutX;
+                int fromPosY = effectiveFromY + fromOutY;
+                float t = transitionProgress;
+                finalXScreen = static_cast<int>(fromPosX + (toPosX - fromPosX) * t);
+                finalYScreen = static_cast<int>(fromPosY + (toPosY - fromPosY) * t);
+                if (relativeStretching) {
+                    finalWScreen = static_cast<int>(fromSizeW + (toSizeW - fromSizeW) * t);
+                    finalHScreen = static_cast<int>(fromSizeH + (toSizeH - fromSizeH) * t);
+                }
+            }
+
+            bool shouldApplySlide = false;
+            float slideProgress = 1.0f;
+            int modeWidth = cfg.eyezoom.windowWidth;
+            int targetViewportX = (fullW - modeWidth) / 2;
+            bool hasEyeZoomAnimatedPosition = eyeZoomAnimatedViewportX >= 0 && targetViewportX > 0;
+            bool isEyeZoomTransitioning = hasEyeZoomAnimatedPosition && eyeZoomAnimatedViewportX < targetViewportX;
+            bool isTransitioningToEyeZoom = isEyeZoomMode && isEyeZoomTransitioning && !isTransitioningFromEyeZoom;
+            bool isEyeZoomSlideOut = isEyeZoomMode && isTransitioningFromEyeZoom && isEyeZoomTransitioning;
+            if (cfg.eyezoom.slideMirrorsIn && (isTransitioningToEyeZoom || isEyeZoomSlideOut) && hasEyeZoomAnimatedPosition) {
+                shouldApplySlide = true;
+                slideProgress = static_cast<float>(eyeZoomAnimatedViewportX) / static_cast<float>(targetViewportX);
+            }
+            if (!shouldApplySlide && mirrorSlideProgress < 1.0f && !skipAnimation) {
+                if (toSlideMirrorsIn && !isSlideOutPass) {
+                    shouldApplySlide = true;
+                    slideProgress = mirrorSlideProgress;
+                } else if (fromSlideMirrorsIn && isSlideOutPass) {
+                    shouldApplySlide = true;
+                    slideProgress = 1.0f - mirrorSlideProgress;
+                }
+            }
+            if (shouldApplySlide && sourceMirrorNames.count(conf.name) > 0) { shouldApplySlide = false; }
+            if (shouldApplySlide) {
+                slideProgress = (std::max)(0.0f, (std::min)(1.0f, slideProgress));
+                bool isOnLeftSide = (finalXScreen + finalWScreen / 2) < (fullW / 2);
+                if (isOnLeftSide) {
+                    finalXScreen = -finalWScreen + static_cast<int>((finalXScreen + finalWScreen) * slideProgress);
+                } else {
+                    finalXScreen = fullW - static_cast<int>((fullW - finalXScreen) * slideProgress);
+                }
+            }
+
+            renderData.screenX = finalXScreen;
+            renderData.screenY = finalYScreen;
+            renderData.screenW = finalWScreen;
+            renderData.screenH = finalHScreen;
+
+            int finalYGl = fullH - finalYScreen - finalHScreen;
+            float nx1 = (static_cast<float>(finalXScreen) / fullW) * 2.0f - 1.0f;
+            float ny1 = (static_cast<float>(finalYGl) / fullH) * 2.0f - 1.0f;
+            float nx2 = (static_cast<float>(finalXScreen + finalWScreen) / fullW) * 2.0f - 1.0f;
+            float ny2 = (static_cast<float>(finalYGl + finalHScreen) / fullH) * 2.0f - 1.0f;
+            float verts[] = { nx1, ny1, 0, 0, nx2, ny1, 1, 0, nx2, ny2, 1, 1, nx1, ny1, 0, 0, nx2, ny2, 1, 1, nx1, ny2, 0, 1 };
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        }
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glUseProgram(g_staticBorderProgram);
+    for (const auto& renderData : mirrorsToRender) {
+        const MirrorConfig& conf = *renderData.config;
+        const MirrorBorderConfig& border = conf.border;
+        if (border.type != MirrorBorderType::Static || border.staticThickness <= 0 || !renderData.hasFrameContent ||
+            renderData.screenW <= 0 || renderData.screenH <= 0) {
+            continue;
+        }
+
+        int baseW = (border.staticWidth > 0) ? border.staticWidth : renderData.screenW;
+        int baseH = (border.staticHeight > 0) ? border.staticHeight : renderData.screenH;
+        int borderExtension = border.staticThickness + 1;
+        int quadW = baseW + borderExtension * 2;
+        int quadH = baseH + borderExtension * 2;
+        int centerOffsetX = (baseW - renderData.screenW) / 2;
+        int centerOffsetY = (baseH - renderData.screenH) / 2;
+        int quadX = renderData.screenX - centerOffsetX + border.staticOffsetX - borderExtension;
+        int quadY = renderData.screenY - centerOffsetY + border.staticOffsetY - borderExtension;
+        int quadYGl = fullH - (quadY + quadH);
+
+        glUniform1i(g_staticBorderShaderLocs.shape, static_cast<int>(border.staticShape));
+        glUniform4f(g_staticBorderShaderLocs.borderColor, border.staticColor.r, border.staticColor.g, border.staticColor.b,
+                    border.staticColor.a * conf.opacity * modeOpacity);
+        glUniform1f(g_staticBorderShaderLocs.thickness, static_cast<float>(border.staticThickness));
+        glUniform1f(g_staticBorderShaderLocs.radius, static_cast<float>(border.staticRadius));
+        glUniform2f(g_staticBorderShaderLocs.size, static_cast<float>(baseW), static_cast<float>(baseH));
+        glUniform2f(g_staticBorderShaderLocs.quadSize, static_cast<float>(quadW), static_cast<float>(quadH));
+
+        float nx1 = (static_cast<float>(quadX) / fullW) * 2.0f - 1.0f;
+        float ny1 = (static_cast<float>(quadYGl) / fullH) * 2.0f - 1.0f;
+        float nx2 = (static_cast<float>(quadX + quadW) / fullW) * 2.0f - 1.0f;
+        float ny2 = (static_cast<float>(quadYGl + quadH) / fullH) * 2.0f - 1.0f;
+        float verts[] = { nx1, ny1, 0, 0, nx2, ny1, 1, 0, nx2, ny2, 1, 1, nx1, ny1, 0, 0, nx2, ny2, 1, 1, nx1, ny2, 0, 1 };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glDisable(GL_BLEND);
+}
+
+static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int fullW, int fullH, int gameX, int gameY, int gameW,
+                               int gameH, int gameResW, int gameResH, bool relativeStretching, float transitionProgress, int fromX,
+                               int fromY, int fromW, int fromH, float modeOpacity, bool excludeOnlyOnMyScreen) {
+    if (activeImages.empty()) return;
+
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glActiveTexture(GL_TEXTURE0);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    for (const auto& conf : activeImages) {
+        if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
+
+        const float effectiveOpacity = conf.opacity * modeOpacity;
+        const bool hasBg = conf.background.enabled && conf.background.opacity > 0.0f;
+        const bool hasBorder = conf.border.enabled && conf.border.width > 0;
+        if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) continue;
+
+        GLuint texId = 0;
+        int texWidth = 0;
+        int texHeight = 0;
+        bool isFullyTransparent = false;
+        {
+            std::lock_guard<std::mutex> lock(g_userImagesMutex);
+            auto it = g_userImages.find(conf.name);
+            if (it == g_userImages.end() || it->second.textureId == 0) continue;
+            UserImageInstance& inst = it->second;
+            texId = inst.textureId;
+            texWidth = inst.width;
+            texHeight = inst.height;
+            isFullyTransparent = inst.isFullyTransparent;
+
+            if (!inst.filterInitialized || inst.lastPixelatedScaling != conf.pixelatedScaling) {
+                BindTextureDirect(GL_TEXTURE_2D, texId);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR);
+                inst.lastPixelatedScaling = conf.pixelatedScaling;
+                inst.filterInitialized = true;
+            }
+        }
+
+        int displayW = 0;
+        int displayH = 0;
+        int croppedWidth = texWidth - conf.crop_left - conf.crop_right;
+        int croppedHeight = texHeight - conf.crop_top - conf.crop_bottom;
+        if (croppedWidth < 1) croppedWidth = 1;
+        if (croppedHeight < 1) croppedHeight = 1;
+        displayW = (std::max)(1, static_cast<int>(croppedWidth * conf.scale));
+        displayH = (std::max)(1, static_cast<int>(croppedHeight * conf.scale));
+
+        bool isViewportRelative = conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";
+        int finalScreenX = 0;
+        int finalScreenY = 0;
+        int finalDisplayW = displayW;
+        int finalDisplayH = displayH;
+
+        if (isViewportRelative) {
+            float toScaleX = (gameW > 0 && gameResW > 0) ? static_cast<float>(gameW) / gameResW : 1.0f;
+            float toScaleY = (gameH > 0 && gameResH > 0) ? static_cast<float>(gameH) / gameResH : 1.0f;
+            float fromScaleX = (fromW > 0 && gameResW > 0) ? static_cast<float>(fromW) / gameResW : toScaleX;
+            float fromScaleY = (fromH > 0 && gameResH > 0) ? static_cast<float>(fromH) / gameResH : toScaleY;
+            int toDisplayW = relativeStretching ? static_cast<int>(displayW * toScaleX) : displayW;
+            int toDisplayH = relativeStretching ? static_cast<int>(displayH * toScaleY) : displayH;
+            int fromDisplayW = relativeStretching ? static_cast<int>(displayW * fromScaleX) : displayW;
+            int fromDisplayH = relativeStretching ? static_cast<int>(displayH * fromScaleY) : displayH;
+
+            int toPosX = 0;
+            int toPosY = 0;
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, toDisplayW, toDisplayH, gameX, gameY, gameW, gameH,
+                                                  fullW, fullH, toPosX, toPosY);
+
+            int fromPosX = 0;
+            int fromPosY = 0;
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, fromDisplayW, fromDisplayH, fromX, fromY, fromW,
+                                                  fromH, fullW, fullH, fromPosX, fromPosY);
+
+            float t = transitionProgress;
+            finalScreenX = static_cast<int>(fromPosX + (toPosX - fromPosX) * t);
+            finalScreenY = static_cast<int>(fromPosY + (toPosY - fromPosY) * t);
+            if (relativeStretching) {
+                finalDisplayW = static_cast<int>(fromDisplayW + (toDisplayW - fromDisplayW) * t);
+                finalDisplayH = static_cast<int>(fromDisplayH + (toDisplayH - fromDisplayH) * t);
+            }
+        } else {
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, finalDisplayW, finalDisplayH, gameX, gameY, gameW,
+                                                  gameH, fullW, fullH, finalScreenX, finalScreenY);
+        }
+
+        int finalScreenYGl = fullH - finalScreenY - finalDisplayH;
+        float nx1 = (static_cast<float>(finalScreenX) / fullW) * 2.0f - 1.0f;
+        float ny1 = (static_cast<float>(finalScreenYGl) / fullH) * 2.0f - 1.0f;
+        float nx2 = (static_cast<float>(finalScreenX + finalDisplayW) / fullW) * 2.0f - 1.0f;
+        float ny2 = (static_cast<float>(finalScreenYGl + finalDisplayH) / fullH) * 2.0f - 1.0f;
+
+        if (hasBg && !isFullyTransparent) {
+            glUseProgram(g_solidColorProgram);
+            glUniform4f(g_solidColorShaderLocs.color, conf.background.color.r, conf.background.color.g, conf.background.color.b,
+                        conf.background.opacity * modeOpacity);
+            float bgVerts[] = { nx1, ny1, 0, 0, nx2, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny2, 0, 0 };
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        glUseProgram(g_imageRenderProgram);
+        BindTextureDirect(GL_TEXTURE_2D, texId);
+        const bool hasColorKeys = conf.enableColorKey && !conf.colorKeys.empty();
+        glUniform1i(g_imageRenderShaderLocs.enableColorKey, hasColorKeys ? 1 : 0);
+        if (hasColorKeys) {
+            int numKeys = (std::min)(static_cast<int>(conf.colorKeys.size()), ConfigDefaults::MAX_COLOR_KEYS);
+            float colors[ConfigDefaults::MAX_COLOR_KEYS * 3] = {};
+            float sensitivities[ConfigDefaults::MAX_COLOR_KEYS] = {};
+            for (int i = 0; i < numKeys; ++i) {
+                colors[i * 3 + 0] = conf.colorKeys[i].color.r;
+                colors[i * 3 + 1] = conf.colorKeys[i].color.g;
+                colors[i * 3 + 2] = conf.colorKeys[i].color.b;
+                sensitivities[i] = conf.colorKeys[i].sensitivity;
+            }
+            glUniform1i(g_imageRenderShaderLocs.numColorKeys, numKeys);
+            glUniform3fv(g_imageRenderShaderLocs.colorKeys, numKeys, colors);
+            glUniform1fv(g_imageRenderShaderLocs.sensitivities, numKeys, sensitivities);
+        }
+        glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOpacity);
+
+        const float invW = (texWidth > 0) ? (1.0f / texWidth) : 0.0f;
+        const float invH = (texHeight > 0) ? (1.0f / texHeight) : 0.0f;
+        float tu1 = conf.crop_left * invW;
+        float tu2 = (texWidth - conf.crop_right) * invW;
+        float tv1 = conf.crop_bottom * invH;
+        float tv2 = (texHeight - conf.crop_top) * invH;
+        float verts[] = { nx1, ny1, tu1, tv1, nx2, ny1, tu2, tv1, nx2, ny2, tu2, tv2,
+                          nx1, ny1, tu1, tv1, nx2, ny2, tu2, tv2, nx1, ny2, tu1, tv2 };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        if (hasBorder && !isFullyTransparent) {
+            RenderGameBorder(finalScreenX, finalScreenY, finalDisplayW, finalDisplayH, conf.border.width, conf.border.radius,
+                             conf.border.color, fullW, fullH);
+        }
+    }
+
+    glDisable(GL_BLEND);
+}
+
+static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConfig*>& overlays, int fullW, int fullH, int gameX,
+                                       int gameY, int gameW, int gameH, int gameResW, int gameResH, bool relativeStretching,
+                                       float transitionProgress, int fromX, int fromY, int fromW, int fromH, float modeOpacity,
+                                       bool excludeOnlyOnMyScreen) {
+    if (overlays.empty()) return;
+
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glActiveTexture(GL_TEXTURE0);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    std::unique_lock<std::mutex> cacheLock(g_windowOverlayCacheMutex, std::try_to_lock);
+    if (!cacheLock.owns_lock()) {
+        glDisable(GL_BLEND);
+        return;
+    }
+
+    const std::string focusedName = GetFocusedWindowOverlayName();
+    glUseProgram(g_imageRenderProgram);
+    glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
+
+    for (const WindowOverlayConfig* conf : overlays) {
+        if (!conf) continue;
+        if (excludeOnlyOnMyScreen && conf->onlyOnMyScreen) continue;
+
+        const float effectiveOpacity = conf->opacity * modeOpacity;
+        const bool hasBg = conf->background.enabled && conf->background.opacity > 0.0f;
+        const bool hasBorder = conf->border.enabled && conf->border.width > 0;
+        if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) continue;
+
+        auto it = g_windowOverlayCache.find(conf->name);
+        if (it == g_windowOverlayCache.end() || !it->second) continue;
+        WindowOverlayCacheEntry& entry = *it->second;
+
+        if (entry.hasNewFrame.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(entry.swapMutex);
+            entry.readyBuffer.swap(entry.backBuffer);
+            entry.hasNewFrame.store(false, std::memory_order_release);
+        }
+
+        WindowOverlayRenderData* renderData = entry.backBuffer.get();
+        if (renderData && renderData->pixelData && renderData->width > 0 && renderData->height > 0) {
+            if (renderData != entry.lastUploadedRenderData) {
+                if (entry.glTextureId == 0) {
+                    glGenTextures(1, &entry.glTextureId);
+                    BindTextureDirect(GL_TEXTURE_2D, entry.glTextureId);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    entry.filterInitialized = false;
+                }
+
+                BindTextureDirect(GL_TEXTURE_2D, entry.glTextureId);
+                if (entry.glTextureWidth != renderData->width || entry.glTextureHeight != renderData->height) {
+                    entry.glTextureWidth = renderData->width;
+                    entry.glTextureHeight = renderData->height;
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderData->width, renderData->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                 renderData->pixelData);
+                } else {
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, renderData->width, renderData->height, GL_RGBA, GL_UNSIGNED_BYTE,
+                                    renderData->pixelData);
+                }
+                entry.lastUploadedRenderData = renderData;
+            }
+        }
+
+        if (entry.glTextureId == 0) continue;
+
+        int croppedW = entry.glTextureWidth - conf->crop_left - conf->crop_right;
+        int croppedH = entry.glTextureHeight - conf->crop_top - conf->crop_bottom;
+        croppedW = (std::max)(1, croppedW);
+        croppedH = (std::max)(1, croppedH);
+        int displayW = (std::max)(1, static_cast<int>(croppedW * conf->scale));
+        int displayH = (std::max)(1, static_cast<int>(croppedH * conf->scale));
+
+        bool isViewportRelative = conf->relativeTo.length() > 8 && conf->relativeTo.substr(conf->relativeTo.length() - 8) == "Viewport";
+        int screenX = 0;
+        int screenY = 0;
+        if (isViewportRelative) {
+            float toScaleX = (gameW > 0 && gameResW > 0) ? static_cast<float>(gameW) / gameResW : 1.0f;
+            float toScaleY = (gameH > 0 && gameResH > 0) ? static_cast<float>(gameH) / gameResH : 1.0f;
+            float fromScaleX = (fromW > 0 && gameResW > 0) ? static_cast<float>(fromW) / gameResW : toScaleX;
+            float fromScaleY = (fromH > 0 && gameResH > 0) ? static_cast<float>(fromH) / gameResH : toScaleY;
+            int toDisplayW = relativeStretching ? static_cast<int>(displayW * toScaleX) : displayW;
+            int toDisplayH = relativeStretching ? static_cast<int>(displayH * toScaleY) : displayH;
+            int fromDisplayW = relativeStretching ? static_cast<int>(displayW * fromScaleX) : displayW;
+            int fromDisplayH = relativeStretching ? static_cast<int>(displayH * fromScaleY) : displayH;
+            int toPosX = 0;
+            int toPosY = 0;
+            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, toDisplayW, toDisplayH, gameX, gameY, gameW,
+                                                  gameH, fullW, fullH, toPosX, toPosY);
+            int fromPosX = 0;
+            int fromPosY = 0;
+            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, fromDisplayW, fromDisplayH, fromX, fromY, fromW,
+                                                  fromH, fullW, fullH, fromPosX, fromPosY);
+            float t = transitionProgress;
+            screenX = static_cast<int>(fromPosX + (toPosX - fromPosX) * t);
+            screenY = static_cast<int>(fromPosY + (toPosY - fromPosY) * t);
+            if (relativeStretching) {
+                displayW = static_cast<int>(fromDisplayW + (toDisplayW - fromDisplayW) * t);
+                displayH = static_cast<int>(fromDisplayH + (toDisplayH - fromDisplayH) * t);
+            }
+        } else {
+            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, displayW, displayH, gameX, gameY, gameW, gameH,
+                                                  fullW, fullH, screenX, screenY);
+        }
+
+        int screenYGl = fullH - screenY - displayH;
+        float nx1 = (static_cast<float>(screenX) / fullW) * 2.0f - 1.0f;
+        float ny1 = (static_cast<float>(screenYGl) / fullH) * 2.0f - 1.0f;
+        float nx2 = (static_cast<float>(screenX + displayW) / fullW) * 2.0f - 1.0f;
+        float ny2 = (static_cast<float>(screenYGl + displayH) / fullH) * 2.0f - 1.0f;
+
+        if (hasBg) {
+            glUseProgram(g_solidColorProgram);
+            glUniform4f(g_solidColorShaderLocs.color, conf->background.color.r, conf->background.color.g, conf->background.color.b,
+                        conf->background.opacity * modeOpacity);
+            float bgVerts[] = { nx1, ny1, 0, 0, nx2, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny2, 0, 0 };
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        glUseProgram(g_imageRenderProgram);
+        BindTextureDirect(GL_TEXTURE_2D, entry.glTextureId);
+        if (!entry.filterInitialized || entry.lastPixelatedScaling != conf->pixelatedScaling) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, conf->pixelatedScaling ? GL_NEAREST : GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, conf->pixelatedScaling ? GL_NEAREST : GL_LINEAR);
+            entry.lastPixelatedScaling = conf->pixelatedScaling;
+            entry.filterInitialized = true;
+        }
+
+        glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
+        glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOpacity);
+        float tu1 = static_cast<float>(conf->crop_left) / entry.glTextureWidth;
+        float tv1 = static_cast<float>(conf->crop_top) / entry.glTextureHeight;
+        float tu2 = static_cast<float>(entry.glTextureWidth - conf->crop_right) / entry.glTextureWidth;
+        float tv2 = static_cast<float>(entry.glTextureHeight - conf->crop_bottom) / entry.glTextureHeight;
+        float verts[] = { nx1, ny1, tu1, tv2, nx2, ny1, tu2, tv2, nx2, ny2, tu2, tv1,
+                          nx1, ny1, tu1, tv2, nx2, ny2, tu2, tv1, nx1, ny2, tu1, tv1 };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        if (hasBorder) {
+            RenderGameBorder(screenX, screenY, displayW, displayH, conf->border.width, conf->border.radius, conf->border.color, fullW,
+                             fullH);
+        }
+        if (!focusedName.empty() && focusedName == conf->name) {
+            RenderGameBorder(screenX, screenY, displayW, displayH, 3, conf->border.enabled ? conf->border.radius : 0,
+                             { 0.0f, 1.0f, 0.0f, 1.0f }, fullW, fullH);
+        }
+    }
+
+    glDisable(GL_BLEND);
+}
+
+struct SameThreadOverlayState {
+    int fullW = 0;
+    int fullH = 0;
+
+    int gameW = 0;
+    int gameH = 0;
+    int finalX = 0;
+    int finalY = 0;
+    int finalW = 0;
+    int finalH = 0;
+
+    GLuint gameTextureId = 0;
+    std::string modeId;
+
+    bool isAnimating = false;
+    float overlayOpacity = 1.0f;
+
+    bool excludeOnlyOnMyScreen = false;
+    bool skipAnimation = false;
+    bool relativeStretching = false;
+
+    float transitionProgress = 1.0f;
+    int fromX = 0;
+    int fromY = 0;
+    int fromW = 0;
+    int fromH = 0;
+    int toX = 0;
+    int toY = 0;
+    int toW = 0;
+    int toH = 0;
+
+    bool shouldRenderGui = false;
+    bool showPerformanceOverlay = false;
+    bool showProfiler = false;
+    bool showEyeZoom = false;
+    float eyeZoomFadeOpacity = 1.0f;
+    int eyeZoomAnimatedViewportX = -1;
+    bool isTransitioningFromEyeZoom = false;
+    GLuint eyeZoomSnapshotTexture = 0;
+    int eyeZoomSnapshotWidth = 0;
+    int eyeZoomSnapshotHeight = 0;
+    bool showTextureGrid = false;
+    int textureGridModeWidth = 0;
+    int textureGridModeHeight = 0;
+
+    bool showWelcomeToast = false;
+    bool welcomeToastIsFullscreen = false;
+
+    bool modeHasMirrors = false;
+    bool modeHasImages = false;
+    bool modeHasWindowOverlays = false;
+
+    bool isRawWindowedMode = false;
+    std::string fromModeId;
+    bool fromSlideMirrorsIn = false;
+    bool toSlideMirrorsIn = false;
+    float mirrorSlideProgress = 1.0f;
+};
+
+static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
+    const bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
+                                      request.showTextureGrid || request.showEyeZoom;
+    if (!shouldRenderAnyImGui) return;
+
+    HWND hwnd = g_minecraftHwnd.load();
+    if (!hwnd) return;
+    InitializeImGuiContext(hwnd);
+    if (ImGui::GetCurrentContext() == nullptr) { return; }
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+
+    // Feed queued input from the window thread into the main-thread ImGui context.
+    ImGuiInputQueue_DrainToImGui();
+    ImGui::NewFrame();
+
+    if (request.showTextureGrid) {
+        RenderTextureGridOverlay(true, request.textureGridModeWidth, request.textureGridModeHeight);
+    }
+
+    RenderCachedTextureGridLabels();
+    RenderCachedEyeZoomTextLabels();
+
+    if (request.shouldRenderGui) { RenderSettingsGUI(); }
+    RenderPerformanceOverlay(request.showPerformanceOverlay);
+    RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
+
+    ImGuiInputQueue_PublishCaptureState();
+
+    ImGui::Render();
+    RenderImGuiWithStateProtection(true);
+}
+
+static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, const Config& cfg, const GLState& s) {
+    PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+
+    static uint64_t s_cachedActiveConfigVersion = 0;
+    static std::string s_cachedActiveModeId;
+    static bool s_cachedActiveImagesVisible = false;
+    static bool s_cachedActiveWindowOverlaysVisible = false;
+    static std::vector<MirrorConfig> s_cachedActiveMirrors;
+    static std::vector<ImageConfig> s_cachedActiveImages;
+    static std::vector<const WindowOverlayConfig*> s_cachedActiveWindowOverlays;
+    static const std::vector<MirrorConfig> s_emptyMirrors;
+    static const std::vector<ImageConfig> s_emptyImages;
+    static const std::vector<const WindowOverlayConfig*> s_emptyWindowOverlays;
+
+    GameViewportGeometry geo{};
+    geo.gameW = request.gameW;
+    geo.gameH = request.gameH;
+    geo.finalX = request.finalX;
+    geo.finalY = request.finalY;
+    geo.finalW = request.finalW;
+    geo.finalH = request.finalH;
+
+    std::vector<MirrorConfig> eyeZoomSlideOutMirrors;
+    std::vector<MirrorConfig> genericSlideOutMirrors;
+    const bool hasMirrorSlideOutWork = !request.isRawWindowedMode &&
+                                       ((request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) ||
+                                        (!request.isTransitioningFromEyeZoom && request.fromSlideMirrorsIn && !request.fromModeId.empty() &&
+                                         request.mirrorSlideProgress < 1.0f && !request.skipAnimation));
+    const bool needModeElements = request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays || hasMirrorSlideOutWork;
+    const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
+    const bool imagesVisible = request.modeHasImages;
+    const bool windowOverlaysVisible = request.modeHasWindowOverlays;
+    if (needModeElements) {
+        if (s_cachedActiveConfigVersion != cfgVersion || s_cachedActiveModeId != request.modeId ||
+            s_cachedActiveImagesVisible != imagesVisible || s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible) {
+            s_cachedActiveConfigVersion = cfgVersion;
+            s_cachedActiveModeId = request.modeId;
+            s_cachedActiveImagesVisible = imagesVisible;
+            s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
+            CollectActiveElementsForMode(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
+                                         s_cachedActiveWindowOverlays);
+        }
+    }
+    const std::vector<MirrorConfig>& activeMirrors = needModeElements ? s_cachedActiveMirrors : s_emptyMirrors;
+    const std::vector<ImageConfig>& activeImages = needModeElements ? s_cachedActiveImages : s_emptyImages;
+    const std::vector<const WindowOverlayConfig*>& activeWindowOverlays =
+        needModeElements ? s_cachedActiveWindowOverlays : s_emptyWindowOverlays;
+
+    if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
+        std::vector<MirrorConfig> eyeZoomMirrors;
+        std::vector<ImageConfig> unusedImages;
+        std::vector<const WindowOverlayConfig*> unusedOverlays;
+        CollectActiveElementsForMode(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays);
+
+        for (const auto& ezMirror : eyeZoomMirrors) {
+            bool existsInTarget = false;
+            for (const auto& targetMirror : activeMirrors) {
+                if (targetMirror.name == ezMirror.name) {
+                    existsInTarget = true;
+                    break;
+                }
+            }
+            if (!existsInTarget) { eyeZoomSlideOutMirrors.push_back(ezMirror); }
+        }
+    }
+
+    if (!request.isRawWindowedMode && !request.isTransitioningFromEyeZoom && request.fromSlideMirrorsIn && !request.fromModeId.empty() &&
+        request.mirrorSlideProgress < 1.0f && !request.skipAnimation) {
+        std::vector<MirrorConfig> fromModeMirrors;
+        std::vector<ImageConfig> unusedImages;
+        std::vector<const WindowOverlayConfig*> unusedOverlays;
+        CollectActiveElementsForMode(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays);
+
+        for (const auto& fromMirror : fromModeMirrors) {
+            bool existsInTarget = false;
+            for (const auto& targetMirror : activeMirrors) {
+                if (targetMirror.name == fromMirror.name) {
+                    existsInTarget = true;
+                    break;
+                }
+            }
+            if (!existsInTarget) { genericSlideOutMirrors.push_back(fromMirror); }
+        }
+    }
+
+    if (!request.isRawWindowedMode && request.showEyeZoom) {
+        ClearEyeZoomTextLabels();
+        handleEyeZoomMode(s, cfg.eyezoom, request.fullW, request.fullH, request.eyeZoomFadeOpacity,
+                          request.eyeZoomAnimatedViewportX, request.isTransitioningFromEyeZoom, request.gameTextureId,
+                          request.gameW, request.gameH);
+        PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+    } else {
+        ClearEyeZoomTextLabels();
+    }
+
+    if (!request.isRawWindowedMode) {
+        std::vector<MirrorConfig> mirrorsForCapture = activeMirrors;
+        AppendUniqueMirrorsByName(mirrorsForCapture, eyeZoomSlideOutMirrors);
+        AppendUniqueMirrorsByName(mirrorsForCapture, genericSlideOutMirrors);
+
+        GLuint sourceTexture = 0;
+        int sourceW = 0;
+        int sourceH = 0;
+        if (!mirrorsForCapture.empty() &&
+            SelectSameThreadGameTexture(request.gameTextureId, request.gameW, request.gameH, sourceTexture, sourceW, sourceH)) {
+            if (RenderMirrorCapturesOnCurrentThread(mirrorsForCapture, sourceTexture, sourceW, sourceH, request.fullW, request.fullH,
+                                                   geo.finalX, geo.finalY, geo.finalW, geo.finalH)) {
+                PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+            }
+        }
+
+        if (!activeMirrors.empty()) {
+            const bool isEyeZoomMode = (request.modeId == "EyeZoom");
+            RenderMirrorsDirect(activeMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
+                                request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
+                                request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH, request.toX,
+                                request.toY, request.toW, request.toH, isEyeZoomMode, request.isTransitioningFromEyeZoom,
+                                request.eyeZoomAnimatedViewportX, request.skipAnimation, request.fromModeId, request.fromSlideMirrorsIn,
+                                request.toSlideMirrorsIn, false, cfg);
+        }
+
+        if (!eyeZoomSlideOutMirrors.empty()) {
+            RenderMirrorsDirect(eyeZoomSlideOutMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
+                                request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
+                                request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH,
+                                request.toX, request.toY, request.toW, request.toH, true, request.isTransitioningFromEyeZoom,
+                                request.eyeZoomAnimatedViewportX, request.skipAnimation, request.modeId, cfg.eyezoom.slideMirrorsIn,
+                                request.toSlideMirrorsIn, true, cfg);
+        }
+
+        if (!genericSlideOutMirrors.empty()) {
+            RenderMirrorsDirect(genericSlideOutMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
+                                request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
+                                request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH,
+                                request.toX, request.toY, request.toW, request.toH, false, false, -1, request.skipAnimation,
+                                request.modeId, request.fromSlideMirrorsIn, request.toSlideMirrorsIn, true, cfg);
+        }
+    }
+
+    if (!request.isRawWindowedMode && !activeImages.empty()) {
+        RenderImagesDirect(activeImages, request.fullW, request.fullH, request.toX, request.toY, request.toW, request.toH,
+                           request.gameW, request.gameH, request.relativeStretching, request.transitionProgress, request.fromX,
+                           request.fromY, request.fromW, request.fromH, request.overlayOpacity, request.excludeOnlyOnMyScreen);
+    }
+
+    if (!activeWindowOverlays.empty()) {
+        RenderWindowOverlaysDirect(activeWindowOverlays, request.fullW, request.fullH, request.toX, request.toY, request.toW,
+                                   request.toH, request.gameW, request.gameH, request.relativeStretching, request.transitionProgress,
+                                   request.fromX, request.fromY, request.fromW, request.fromH, request.overlayOpacity,
+                                   request.excludeOnlyOnMyScreen);
+    }
+
+    RenderSameThreadImGui(request);
+    if (request.showWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
+
+    return !activeMirrors.empty() || !eyeZoomSlideOutMirrors.empty() || !genericSlideOutMirrors.empty() || !activeImages.empty() ||
+           !activeWindowOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
+           request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast;
+}
+
+void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fullW, int fullH, float opacity,
+                       int animatedViewportX, bool useSnapshot, GLuint preferredGameTexture, int preferredGameW,
+                       int preferredGameH) {
+    PROFILE_SCOPE_CAT("EyeZoom Mode Rendering", "Rendering");
+
+    if (opacity <= 0.0f || fullW <= 0 || fullH <= 0) { return; }
+
+    GLuint gameTextureToUse = 0;
+    int gameTextureW = 0;
+    int gameTextureH = 0;
 
     if (useSnapshot && !s_eyeZoomSnapshotValid) {
         return;
     }
 
-    if (!useSnapshot && gameTextureToUse == UINT_MAX) {
+    if (!useSnapshot &&
+        !SelectSameThreadGameTexture(preferredGameTexture, preferredGameW, preferredGameH, gameTextureToUse, gameTextureW,
+                                     gameTextureH)) {
         return;
     }
 
@@ -1458,10 +2747,6 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
         glViewport(0, 0, fullW, fullH);
     glDisable(GL_FRAMEBUFFER_SRGB);
     glDisable(GL_SCISSOR_TEST);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
 
     int modeWidth = zoomConfig.windowWidth;
     int targetViewportX = (fullW - modeWidth) / 2;
@@ -1512,8 +2797,8 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
 
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 
-    int texWidth = zoomConfig.windowWidth;
-    int texHeight = zoomConfig.windowHeight;
+    int texWidth = useSnapshot ? s_eyeZoomSnapshotWidth : gameTextureW;
+    int texHeight = useSnapshot ? s_eyeZoomSnapshotHeight : gameTextureH;
 
     int srcCenterX = texWidth / 2;
     int srcLeft = srcCenterX - zoomConfig.cloneWidth / 2;
@@ -1522,6 +2807,12 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
     int srcCenterY = texHeight / 2;
     int srcBottom = srcCenterY - zoomConfig.cloneHeight / 2;
     int srcTop = srcCenterY + zoomConfig.cloneHeight / 2;
+
+    srcLeft = (std::max)(0, srcLeft);
+    srcBottom = (std::max)(0, srcBottom);
+    srcRight = (std::min)(texWidth, srcRight);
+    srcTop = (std::min)(texHeight, srcTop);
+    if (srcRight <= srcLeft || srcTop <= srcBottom) { return; }
 
     int dstLeft = zoomX;
     int dstRight = zoomX + zoomOutputWidth;
@@ -1550,6 +2841,10 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
         }
     };
 
+    auto EnsureEyeZoomBlitFramebuffer = [&]() {
+        if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
+    };
+
     auto ForceOpaqueAlphaInCurrentDrawFbo = [&](int x, int y, int w, int h) {
         if (w <= 0 || h <= 0) { return; }
 
@@ -1574,300 +2869,152 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
         }
     };
 
-    if (opacity < 1.0f) {
-        if (s_eyeZoomTempTexture == 0 || s_eyeZoomTempWidth != zoomOutputWidth || s_eyeZoomTempHeight != zoomOutputHeight) {
-            if (s_eyeZoomTempTexture != 0) { glDeleteTextures(1, &s_eyeZoomTempTexture); }
-            if (s_eyeZoomTempFBO != 0) { glDeleteFramebuffers(1, &s_eyeZoomTempFBO); }
-
-            glGenFramebuffers(1, &s_eyeZoomTempFBO);
-            glGenTextures(1, &s_eyeZoomTempTexture);
-
-            BindTextureDirect(GL_TEXTURE_2D, s_eyeZoomTempTexture);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-            glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomTempTexture, 0);
-
-            s_eyeZoomTempWidth = zoomOutputWidth;
-            s_eyeZoomTempHeight = zoomOutputHeight;
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
-        if (oglViewport)
-            oglViewport(0, 0, zoomOutputWidth, zoomOutputHeight);
-        else
-            glViewport(0, 0, zoomOutputWidth, zoomOutputHeight);
-
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        if (useSnapshot) {
-            if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomTempFBO);
-            glBlitFramebuffer(0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, 0, 0, zoomOutputWidth, zoomOutputHeight,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (useSnapshot) {
+        if (opacity < 1.0f) {
+            const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            DrawPassthroughTextureRegion(s_eyeZoomSnapshotTexture, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW,
+                                         fullH, opacity);
         } else {
-            if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomTempFBO);
-            glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-            EnsureEyeZoomSnapshotAllocated();
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomTempFBO);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
-            glBlitFramebuffer(0, 0, zoomOutputWidth, zoomOutputHeight, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            s_eyeZoomSnapshotValid = true;
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
-        ForceOpaqueAlphaInCurrentDrawFbo(0, 0, zoomOutputWidth, zoomOutputHeight);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
-        if (oglViewport)
-            oglViewport(0, 0, zoomOutputWidth, zoomOutputHeight);
-        else
-            glViewport(0, 0, zoomOutputWidth, zoomOutputHeight);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glUseProgram(g_solidColorProgram);
-        glBindVertexArray(g_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-
-        bool useDefaultOverlay_obs1 = (zoomConfig.activeOverlayIndex < 0 ||
-                                      zoomConfig.activeOverlayIndex >= (int)zoomConfig.overlays.size());
-        if (useDefaultOverlay_obs1) {
-            float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
-            int labelsPerSide = zoomConfig.cloneWidth / 2;
-            int overlayLabelsPerSide = zoomConfig.overlayWidth;
-            if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
-            if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
-            float centerY_local = zoomOutputHeight / 2.0f;
-
-            float boxHeight;
-            if (zoomConfig.linkRectToFont) {
-                boxHeight = g_overlayTextFontSize * 1.2f;
-            } else {
-                boxHeight = static_cast<float>(zoomConfig.rectHeight);
-            }
-
-            std::vector<float> evenVerts, oddVerts;
-            evenVerts.reserve(overlayLabelsPerSide * 6 * 4);
-            oddVerts.reserve(overlayLabelsPerSide * 6 * 4);
-
-            for (int xOffset = -overlayLabelsPerSide; xOffset <= overlayLabelsPerSide; xOffset++) {
-                if (xOffset == 0) continue;
-
-                int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
-                float boxLeft = boxIndex * pixelWidthOnScreen;
-                float boxRight = boxLeft + pixelWidthOnScreen;
-                float boxBottom_local = centerY_local - boxHeight / 2.0f;
-                float boxTop_local = centerY_local + boxHeight / 2.0f;
-
-                float boxNdcLeft = (boxLeft / (float)zoomOutputWidth) * 2.0f - 1.0f;
-                float boxNdcRight = (boxRight / (float)zoomOutputWidth) * 2.0f - 1.0f;
-                float boxNdcBottom = (boxBottom_local / (float)zoomOutputHeight) * 2.0f - 1.0f;
-                float boxNdcTop = (boxTop_local / (float)zoomOutputHeight) * 2.0f - 1.0f;
-
-                auto& verts = (boxIndex % 2 == 0) ? evenVerts : oddVerts;
-                float quad[] = {
-                    boxNdcLeft, boxNdcBottom, 0, 0, boxNdcRight, boxNdcBottom, 0, 0, boxNdcRight, boxNdcTop, 0, 0,
-                    boxNdcLeft, boxNdcBottom, 0, 0, boxNdcRight, boxNdcTop,    0, 0, boxNdcLeft,  boxNdcTop, 0, 0,
-                };
-                verts.insert(verts.end(), std::begin(quad), std::end(quad));
-
-                int displayNumber = abs(xOffset);
-                float numberCenterX = zoomX + boxLeft + pixelWidthOnScreen / 2.0f;
-                float numberCenterY = zoomY + zoomOutputHeight / 2.0f;
-                CacheEyeZoomTextLabel(displayNumber, numberCenterX, numberCenterY, zoomConfig.textColor);
-            }
-
-            if (!evenVerts.empty()) {
-                glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor1.r, zoomConfig.gridColor1.g, zoomConfig.gridColor1.b, zoomConfig.gridColor1Opacity);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, evenVerts.size() * sizeof(float), evenVerts.data());
-                glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(evenVerts.size() / 4));
-            }
-            if (!oddVerts.empty()) {
-                glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor2.r, zoomConfig.gridColor2.g, zoomConfig.gridColor2.b, zoomConfig.gridColor2Opacity);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, oddVerts.size() * sizeof(float), oddVerts.data());
-                glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(oddVerts.size() / 4));
-            }
-        }
-
-        float centerX_local = zoomOutputWidth / 2.0f;
-        float centerLineWidth = 2.0f;
-        float lineLeft = centerX_local - centerLineWidth / 2.0f;
-        float lineRight = centerX_local + centerLineWidth / 2.0f;
-
-        float lineNdcLeft = (lineLeft / (float)zoomOutputWidth) * 2.0f - 1.0f;
-        float lineNdcRight = (lineRight / (float)zoomOutputWidth) * 2.0f - 1.0f;
-        float lineNdcBottom = -1.0f;
-        float lineNdcTop = 1.0f;
-
-        glUniform4f(g_solidColorShaderLocs.color, zoomConfig.centerLineColor.r, zoomConfig.centerLineColor.g, zoomConfig.centerLineColor.b,
-                    zoomConfig.centerLineColorOpacity);
-
-        float centerLineVerts[] = {
-            lineNdcLeft, lineNdcBottom, 0, 0, lineNdcRight, lineNdcBottom, 0, 0, lineNdcRight, lineNdcTop, 0, 0,
-            lineNdcLeft, lineNdcBottom, 0, 0, lineNdcRight, lineNdcTop,    0, 0, lineNdcLeft,  lineNdcTop, 0, 0,
-        };
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(centerLineVerts), centerLineVerts);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        if (oglViewport)
-            oglViewport(0, 0, fullW, fullH);
-        else
-            glViewport(0, 0, fullW, fullH);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        glUseProgram(g_imageRenderProgram);
-        BindTextureDirect(GL_TEXTURE_2D, s_eyeZoomTempTexture);
-        glUniform1i(g_imageRenderShaderLocs.imageTexture, 0);
-        glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
-        glUniform1f(g_imageRenderShaderLocs.opacity, opacity);
-
-        float nx1 = (static_cast<float>(dstLeft) / fullW) * 2.0f - 1.0f;
-        float ny1 = (static_cast<float>(dstBottom) / fullH) * 2.0f - 1.0f;
-        float nx2 = (static_cast<float>(dstRight) / fullW) * 2.0f - 1.0f;
-        float ny2 = (static_cast<float>(dstTop) / fullH) * 2.0f - 1.0f;
-
-        float rv[] = { nx1, ny1, 0, 0, nx2, ny1, 1, 0, nx2, ny2, 1, 1, nx1, ny1, 0, 0, nx2, ny2, 1, 1, nx1, ny2, 0, 1 };
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(rv), rv);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-    } else {
-        glDisable(GL_BLEND);
-
-        if (useSnapshot) {
-            if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
+            EnsureEyeZoomBlitFramebuffer();
+            glDisable(GL_BLEND);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
             glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
-
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-
             glBlitFramebuffer(0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, dstLeft, dstBottom, dstRight, dstTop,
                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
+        }
+    } else {
+        EnsureEyeZoomBlitFramebuffer();
+        if (opacity < 1.0f) {
+            const float sourceRect[] = {
+                static_cast<float>(srcLeft) / gameTextureW,
+                static_cast<float>(srcBottom) / gameTextureH,
+                static_cast<float>(srcRight - srcLeft) / gameTextureW,
+                static_cast<float>(srcTop - srcBottom) / gameTextureH,
+            };
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
+                                         opacity);
         } else {
-
-            if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
+            glDisable(GL_BLEND);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
             glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
-
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-
-            glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-            EnsureEyeZoomSnapshotAllocated();
-
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
-            glBlitFramebuffer(dstLeft, dstBottom, dstRight, dstTop, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
+            glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop,
                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-            s_eyeZoomSnapshotValid = true;
+            ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
 
+        EnsureEyeZoomSnapshotAllocated();
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
+        glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
+        s_eyeZoomSnapshotValid = true;
+    }
 
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glUseProgram(g_solidColorProgram);
-        glBindVertexArray(g_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    const float overlayOpacityScale = (std::min)(1.0f, opacity);
+    const float textAlpha = (std::min)(1.0f, zoomConfig.textColor.a * zoomConfig.textColorOpacity * overlayOpacityScale);
+    Color textColor = zoomConfig.textColor;
+    textColor.a = textAlpha;
 
-        bool useDefaultOverlay_obs2 = (zoomConfig.activeOverlayIndex < 0 ||
-                                      zoomConfig.activeOverlayIndex >= (int)zoomConfig.overlays.size());
-        if (useDefaultOverlay_obs2) {
-            float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
-            int labelsPerSide = zoomConfig.cloneWidth / 2;
-            int overlayLabelsPerSide = zoomConfig.overlayWidth;
-            if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
-            if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
-            float centerY = zoomY + zoomOutputHeight / 2.0f;
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(g_solidColorProgram);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
 
-            float boxHeight;
-            if (zoomConfig.linkRectToFont) {
-                boxHeight = g_overlayTextFontSize * 1.2f;
-            } else {
-                boxHeight = static_cast<float>(zoomConfig.rectHeight);
-            }
+    const bool useDefaultOverlay = (zoomConfig.activeOverlayIndex < 0 ||
+                                    zoomConfig.activeOverlayIndex >= (int)zoomConfig.overlays.size());
+    if (useDefaultOverlay) {
+        float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
+        int labelsPerSide = zoomConfig.cloneWidth / 2;
+        int overlayLabelsPerSide = zoomConfig.overlayWidth;
+        if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
+        if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
+        float centerY = zoomY + zoomOutputHeight / 2.0f;
 
-            std::vector<float> evenVerts, oddVerts;
-            evenVerts.reserve(overlayLabelsPerSide * 6 * 4);
-            oddVerts.reserve(overlayLabelsPerSide * 6 * 4);
-
-            for (int xOffset = -overlayLabelsPerSide; xOffset <= overlayLabelsPerSide; xOffset++) {
-                if (xOffset == 0) continue;
-
-                int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
-                float boxLeft = zoomX + (boxIndex * pixelWidthOnScreen);
-                float boxRight = boxLeft + pixelWidthOnScreen;
-                float boxBottom = centerY - boxHeight / 2.0f;
-                float boxTop = centerY + boxHeight / 2.0f;
-
-                float boxNdcLeft = (boxLeft / (float)fullW) * 2.0f - 1.0f;
-                float boxNdcRight = (boxRight / (float)fullW) * 2.0f - 1.0f;
-                float boxNdcBottom = (boxBottom / (float)fullH) * 2.0f - 1.0f;
-                float boxNdcTop = (boxTop / (float)fullH) * 2.0f - 1.0f;
-
-                auto& verts = (boxIndex % 2 == 0) ? evenVerts : oddVerts;
-                float quad[] = {
-                    boxNdcLeft, boxNdcBottom, 0, 0, boxNdcRight, boxNdcBottom, 0, 0, boxNdcRight, boxNdcTop, 0, 0,
-                    boxNdcLeft, boxNdcBottom, 0, 0, boxNdcRight, boxNdcTop,    0, 0, boxNdcLeft,  boxNdcTop, 0, 0,
-                };
-                verts.insert(verts.end(), std::begin(quad), std::end(quad));
-
-                int displayNumber = abs(xOffset);
-                float numberCenterX = boxLeft + pixelWidthOnScreen / 2.0f;
-                float numberCenterY = centerY;
-                CacheEyeZoomTextLabel(displayNumber, numberCenterX, numberCenterY, zoomConfig.textColor);
-            }
-
-            if (!evenVerts.empty()) {
-                glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor1.r, zoomConfig.gridColor1.g, zoomConfig.gridColor1.b, zoomConfig.gridColor1Opacity);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, evenVerts.size() * sizeof(float), evenVerts.data());
-                glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(evenVerts.size() / 4));
-            }
-            if (!oddVerts.empty()) {
-                glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor2.r, zoomConfig.gridColor2.g, zoomConfig.gridColor2.b, zoomConfig.gridColor2Opacity);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, oddVerts.size() * sizeof(float), oddVerts.data());
-                glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(oddVerts.size() / 4));
-            }
+        float boxHeight;
+        if (zoomConfig.linkRectToFont) {
+            boxHeight = g_overlayTextFontSize * 1.2f;
+        } else {
+            boxHeight = static_cast<float>(zoomConfig.rectHeight);
         }
 
-        float centerX = zoomX + zoomOutputWidth / 2.0f;
-        float centerLineWidth = 2.0f;
-        float lineLeft = centerX - centerLineWidth / 2.0f;
-        float lineRight = centerX + centerLineWidth / 2.0f;
-        float lineBottom = (float)dstBottom;
-        float lineTop = (float)dstTop;
+        std::vector<float> evenVerts, oddVerts;
+        evenVerts.reserve(overlayLabelsPerSide * 6 * 4);
+        oddVerts.reserve(overlayLabelsPerSide * 6 * 4);
 
-        float lineNdcLeft = (lineLeft / (float)fullW) * 2.0f - 1.0f;
-        float lineNdcRight = (lineRight / (float)fullW) * 2.0f - 1.0f;
-        float lineNdcBottom = (lineBottom / (float)fullH) * 2.0f - 1.0f;
-        float lineNdcTop = (lineTop / (float)fullH) * 2.0f - 1.0f;
+        for (int xOffset = -overlayLabelsPerSide; xOffset <= overlayLabelsPerSide; xOffset++) {
+            if (xOffset == 0) continue;
 
-        glUniform4f(g_solidColorShaderLocs.color, zoomConfig.centerLineColor.r, zoomConfig.centerLineColor.g, zoomConfig.centerLineColor.b,
-                    zoomConfig.centerLineColorOpacity);
+            int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
+            float boxLeft = zoomX + (boxIndex * pixelWidthOnScreen);
+            float boxRight = boxLeft + pixelWidthOnScreen;
+            float boxBottom = centerY - boxHeight / 2.0f;
+            float boxTop = centerY + boxHeight / 2.0f;
 
-        float centerLineVerts[] = {
-            lineNdcLeft, lineNdcBottom, 0, 0, lineNdcRight, lineNdcBottom, 0, 0, lineNdcRight, lineNdcTop, 0, 0,
-            lineNdcLeft, lineNdcBottom, 0, 0, lineNdcRight, lineNdcTop,    0, 0, lineNdcLeft,  lineNdcTop, 0, 0,
-        };
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(centerLineVerts), centerLineVerts);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+            float boxNdcLeft = (boxLeft / (float)fullW) * 2.0f - 1.0f;
+            float boxNdcRight = (boxRight / (float)fullW) * 2.0f - 1.0f;
+            float boxNdcBottom = (boxBottom / (float)fullH) * 2.0f - 1.0f;
+            float boxNdcTop = (boxTop / (float)fullH) * 2.0f - 1.0f;
+
+            auto& verts = (boxIndex % 2 == 0) ? evenVerts : oddVerts;
+            float quad[] = {
+                boxNdcLeft, boxNdcBottom, 0, 0, boxNdcRight, boxNdcBottom, 0, 0, boxNdcRight, boxNdcTop, 0, 0,
+                boxNdcLeft, boxNdcBottom, 0, 0, boxNdcRight, boxNdcTop,    0, 0, boxNdcLeft,  boxNdcTop, 0, 0,
+            };
+            verts.insert(verts.end(), std::begin(quad), std::end(quad));
+
+            int displayNumber = abs(xOffset);
+            float numberCenterX = boxLeft + pixelWidthOnScreen / 2.0f;
+            float numberCenterY = centerY;
+            CacheEyeZoomTextLabel(displayNumber, numberCenterX, numberCenterY, textColor);
+        }
+
+        if (!evenVerts.empty()) {
+            glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor1.r, zoomConfig.gridColor1.g, zoomConfig.gridColor1.b,
+                        zoomConfig.gridColor1Opacity * overlayOpacityScale);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, evenVerts.size() * sizeof(float), evenVerts.data());
+            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(evenVerts.size() / 4));
+        }
+        if (!oddVerts.empty()) {
+            glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor2.r, zoomConfig.gridColor2.g, zoomConfig.gridColor2.b,
+                        zoomConfig.gridColor2Opacity * overlayOpacityScale);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, oddVerts.size() * sizeof(float), oddVerts.data());
+            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(oddVerts.size() / 4));
+        }
     }
+
+    float centerX = zoomX + zoomOutputWidth / 2.0f;
+    float centerLineWidth = 2.0f;
+    float lineLeft = centerX - centerLineWidth / 2.0f;
+    float lineRight = centerX + centerLineWidth / 2.0f;
+    float lineBottom = (float)dstBottom;
+    float lineTop = (float)dstTop;
+
+    float lineNdcLeft = (lineLeft / (float)fullW) * 2.0f - 1.0f;
+    float lineNdcRight = (lineRight / (float)fullW) * 2.0f - 1.0f;
+    float lineNdcBottom = (lineBottom / (float)fullH) * 2.0f - 1.0f;
+    float lineNdcTop = (lineTop / (float)fullH) * 2.0f - 1.0f;
+
+    glUniform4f(g_solidColorShaderLocs.color, zoomConfig.centerLineColor.r, zoomConfig.centerLineColor.g,
+                zoomConfig.centerLineColor.b, zoomConfig.centerLineColorOpacity * overlayOpacityScale);
+
+    float centerLineVerts[] = {
+        lineNdcLeft, lineNdcBottom, 0, 0, lineNdcRight, lineNdcBottom, 0, 0, lineNdcRight, lineNdcTop, 0, 0,
+        lineNdcLeft, lineNdcBottom, 0, 0, lineNdcRight, lineNdcTop,    0, 0, lineNdcLeft,  lineNdcTop, 0, 0,
+    };
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(centerLineVerts), centerLineVerts);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glDisable(GL_BLEND);
     glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
@@ -2284,6 +3431,25 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         g_lastFrameGeometry = currentGeo;
     }
 
+    const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
+    g_sameThreadMirrorPipelineActive.store(sameThreadRenderPipeline, std::memory_order_release);
+    if (!UpdateMirrorAsyncResourceMode(nullptr, sameThreadRenderPipeline)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
+        if (oglViewport)
+            oglViewport(0, 0, fullW, fullH);
+        else
+            glViewport(0, 0, fullW, fullH);
+        return;
+    }
+    if (sameThreadRenderPipeline) {
+        if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
+            StopMirrorCaptureThread();
+        }
+        if (g_renderThreadRunning.load(std::memory_order_acquire)) {
+            StopRenderThread();
+        }
+    }
+
     // Start capture/render threads and update game state for mirror capture
     if (hasMirrors) {
         PROFILE_SCOPE_CAT("Mirror Thread Management", "Rendering");
@@ -2294,7 +3460,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         g_captureGameH.store(current_gameH);
 
         // Lazy auto-start capture thread when game texture is available
-        if (!useFramebufferFallback && !g_mirrorCaptureRunning.load()) {
+        if (!sameThreadRenderPipeline && !useFramebufferFallback && !g_mirrorCaptureRunning.load()) {
             HGLRC gameContext = wglGetCurrentContext();
             if (gameContext) {
                 // Capture texture init is now done inside StartMirrorCaptureThread after wglShareLists
@@ -2304,8 +3470,10 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
         if (!useFramebufferFallback && g_graphicsHookDetected.load()) { StartObsHookThread(); }
 
-        // Auto-start render thread for async overlay compositing
-        if (!g_renderThreadRunning.load()) {
+        const bool renderThreadNeeded = !sameThreadRenderPipeline;
+
+        // Auto-start render thread when the async screen path or OBS/virtual-camera path needs it.
+        if (renderThreadNeeded && !g_renderThreadRunning.load()) {
             HGLRC gameContext = wglGetCurrentContext();
             if (gameContext) { StartRenderThread(gameContext); }
         }
@@ -2435,13 +3603,6 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-                        BindTextureDirect(GL_TEXTURE_2D, inst.fboTextureBack);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, inst.fbo_w, inst.fbo_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                     }
 
                     glBindFramebuffer(GL_FRAMEBUFFER, inst.fbo);
@@ -2495,6 +3656,13 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         oglViewport(0, 0, fullW, fullH);
     else
         glViewport(0, 0, fullW, fullH);
+
+    if (g_config.debug.sameThreadRenderPipeline &&
+        (g_showGui.load(std::memory_order_relaxed) || g_imageDragMode.load(std::memory_order_relaxed) ||
+         g_windowOverlayDragMode.load(std::memory_order_relaxed))) {
+        HWND hwnd = g_minecraftHwnd.load();
+        if (hwnd) { InitializeImGuiContext(hwnd); }
+    }
 
     if (g_imageDragMode.load() && g_imageOverlaysVisible.load(std::memory_order_acquire)) {
         PROFILE_SCOPE_CAT("Image Drag Mode", "Input Handling");
@@ -2770,11 +3938,99 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
     const bool wantAsyncOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast;
 
-    // All overlay rendering is done on the render thread
-    // Submit lightweight request - render thread looks up active elements from g_config
-    // This moves collection + rendering work off the main thread, reducing SwapBuffers hook time
+    if (!sameThreadRenderPipeline && wantAsyncOverlayThisFrame && !g_renderThreadRunning.load(std::memory_order_acquire)) {
+        HGLRC gameContext = wglGetCurrentContext();
+        if (gameContext) { StartRenderThread(gameContext); }
+    }
 
-    if (g_renderThreadRunning.load() && wantAsyncOverlayThisFrame) {
+    const bool canRenderOverlayThisFrame = wantAsyncOverlayThisFrame && (sameThreadRenderPipeline || g_renderThreadRunning.load());
+    const auto populateOverlayState = [&](auto& target) {
+        target.fullW = (std::max)(1, fullW);
+        target.fullH = (std::max)(1, fullH);
+        target.gameW = current_gameW;
+        target.gameH = current_gameH;
+        target.finalX = currentGeo.finalX;
+        target.finalY = currentGeo.finalY;
+        target.finalW = currentGeo.finalW;
+        target.finalH = currentGeo.finalH;
+        target.gameTextureId = gameTextureToUse;
+        target.modeId = modeToRender->id;
+        target.isAnimating = isAnimating;
+        target.overlayOpacity = overlayOpacity;
+        target.excludeOnlyOnMyScreen = excludeOnlyOnMyScreen;
+        target.skipAnimation = skipAnimation;
+        target.relativeStretching = modeToRender->relativeStretching;
+
+        const bool transitionEffectivelyCompleteForOverlays = transitionState.active && transitionState.moveProgress >= 1.0f;
+        const bool overlaysShouldLerp = transitionState.active && !transitionEffectivelyCompleteForOverlays &&
+                                        transitionState.overlayTransition != OverlayTransitionType::Cut;
+        if (overlaysShouldLerp) {
+            target.transitionProgress = transitionState.moveProgress;
+            target.fromW = transitionState.fromWidth;
+            target.fromH = transitionState.fromHeight;
+            target.fromX = transitionState.fromX;
+            target.fromY = transitionState.fromY;
+            target.toW = transitionState.targetWidth;
+            target.toH = transitionState.targetHeight;
+            target.toX = transitionState.targetX;
+            target.toY = transitionState.targetY;
+        } else {
+            target.transitionProgress = 1.0f;
+            target.fromX = currentGeo.finalX;
+            target.fromY = currentGeo.finalY;
+            target.fromW = currentGeo.finalW;
+            target.fromH = currentGeo.finalH;
+            target.toX = currentGeo.finalX;
+            target.toY = currentGeo.finalY;
+            target.toW = currentGeo.finalW;
+            target.toH = currentGeo.finalH;
+        }
+
+        target.isTransitioningFromEyeZoom = g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
+        target.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
+        target.showPerformanceOverlay = g_showPerformanceOverlay.load(std::memory_order_relaxed);
+        target.showProfiler = g_showProfiler.load(std::memory_order_relaxed);
+        target.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed);
+        target.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
+        target.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
+        target.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
+        target.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
+        target.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
+        target.showTextureGrid = g_showTextureGrid.load(std::memory_order_relaxed);
+        target.textureGridModeWidth = g_textureGridModeWidth.load(std::memory_order_relaxed);
+        target.textureGridModeHeight = g_textureGridModeHeight.load(std::memory_order_relaxed);
+
+        target.welcomeToastIsFullscreen = isFullscreenMode;
+        target.showWelcomeToast = wantWelcomeToast;
+        target.modeHasMirrors = hasMirrors;
+        target.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
+        target.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
+                                       !modeToRender->windowOverlayIds.empty();
+
+        target.fromModeId = transitionState.fromModeId;
+        if (!transitionState.fromModeId.empty()) {
+            if (const ModeConfig* fromMode = GetMode_Internal(transitionState.fromModeId)) {
+                target.fromSlideMirrorsIn = fromMode->slideMirrorsIn;
+            }
+        }
+        target.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
+        target.mirrorSlideProgress =
+            (transitionState.active && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+    };
+
+    if (sameThreadRenderPipeline) {
+        if (wantAsyncOverlayThisFrame && configSnap) {
+            PROFILE_SCOPE_CAT("Immediate Overlay Render", "Rendering");
+
+            SameThreadOverlayState request;
+            populateOverlayState(request);
+
+            const bool renderedOverlay = RenderSameThreadOverlayPass(request, *configSnap, s);
+            if (renderedOverlay && g_config.debug.delayRenderingUntilBlitted) {
+                PublishOverlayCompletionFence();
+            }
+        }
+    } else if (canRenderOverlayThisFrame) {
         PROFILE_SCOPE_CAT("Async Overlay Submit/Blit", "Rendering");
 
         {
@@ -2784,71 +4040,10 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             static uint64_t s_frameNumber = 0;
             s_frameNumber++;
 
-            const int submitFullW = (std::max)(1, fullW);
-            const int submitFullH = (std::max)(1, fullH);
-
             FrameRenderRequest request;
             request.frameNumber = s_frameNumber;
-            request.fullW = submitFullW;
-            request.fullH = submitFullH;
-            request.gameW = current_gameW;
-            request.gameH = current_gameH;
-            request.finalX = currentGeo.finalX;
-            request.finalY = currentGeo.finalY;
-            request.finalW = currentGeo.finalW;
-            request.finalH = currentGeo.finalH;
-            request.gameTextureId = gameTextureToUse;
-            request.modeId = modeToRender->id;
-            request.isAnimating = isAnimating;
-            request.overlayOpacity = overlayOpacity;
+            populateOverlayState(request);
             request.obsDetected = g_graphicsHookDetected.load();
-            request.excludeOnlyOnMyScreen = excludeOnlyOnMyScreen;
-            request.skipAnimation = skipAnimation;
-            request.relativeStretching = modeToRender->relativeStretching;
-
-            bool transitionEffectivelyCompleteForOverlays = transitionState.active && transitionState.moveProgress >= 1.0f;
-            bool overlaysShouldLerp = transitionState.active && !transitionEffectivelyCompleteForOverlays &&
-                                      transitionState.overlayTransition != OverlayTransitionType::Cut;
-            if (overlaysShouldLerp) {
-                request.transitionProgress = transitionState.moveProgress;
-                request.fromW = transitionState.fromWidth;
-                request.fromH = transitionState.fromHeight;
-                request.fromX = transitionState.fromX;
-                request.fromY = transitionState.fromY;
-                request.toW = transitionState.targetWidth;
-                request.toH = transitionState.targetHeight;
-                request.toX = transitionState.targetX;
-                request.toY = transitionState.targetY;
-            } else {
-                request.transitionProgress = 1.0f;
-                request.fromX = currentGeo.finalX;
-                request.fromY = currentGeo.finalY;
-                request.fromW = currentGeo.finalW;
-                request.fromH = currentGeo.finalH;
-                request.toX = currentGeo.finalX;
-                request.toY = currentGeo.finalY;
-                request.toW = currentGeo.finalW;
-                request.toH = currentGeo.finalH;
-            }
-
-            // Populate ImGui rendering state from global atomics
-            // Acquire isTransitioningFromEyeZoom first - it's the release-paired store,
-            request.isTransitioningFromEyeZoom = g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
-            request.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
-            request.showPerformanceOverlay = g_showPerformanceOverlay.load(std::memory_order_relaxed);
-            request.showProfiler = g_showProfiler.load(std::memory_order_relaxed);
-            request.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed);
-            request.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
-            request.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
-            request.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
-            request.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
-            request.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
-            request.showTextureGrid = g_showTextureGrid.load(std::memory_order_relaxed);
-            request.textureGridModeWidth = g_textureGridModeWidth.load(std::memory_order_relaxed);
-            request.textureGridModeHeight = g_textureGridModeHeight.load(std::memory_order_relaxed);
-
-            request.welcomeToastIsFullscreen = isFullscreenMode;
-            request.showWelcomeToast = wantWelcomeToast;
 
             request.backgroundIsImage = (modeToRender->background.selectedMode == "image");
             request.bgR = modeToRender->background.color.r;
@@ -2862,31 +4057,20 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             request.borderRadius = modeToRender->border.radius;
 
             request.transitioningToFullscreen = isAnimating && EqualsIgnoreCase(modeToRender->id, "Fullscreen");
-            request.fromModeId = transitionState.fromModeId;
             if (!transitionState.fromModeId.empty()) {
                 const ModeConfig* fromMode = GetMode_Internal(transitionState.fromModeId);
-                if (fromMode) {
-                    request.fromSlideMirrorsIn = fromMode->slideMirrorsIn;
-                    if (request.transitioningToFullscreen) {
-                        request.fromBackgroundIsImage = (fromMode->background.selectedMode == "image");
-                        request.fromBgR = fromMode->background.color.r;
-                        request.fromBgG = fromMode->background.color.g;
-                        request.fromBgB = fromMode->background.color.b;
-                        request.fromBorderEnabled = fromMode->border.enabled;
-                        request.fromBorderR = fromMode->border.color.r;
-                        request.fromBorderG = fromMode->border.color.g;
-                        request.fromBorderB = fromMode->border.color.b;
-                        request.fromBorderWidth = fromMode->border.width;
-                        request.fromBorderRadius = fromMode->border.radius;
-                    }
+                if (fromMode && request.transitioningToFullscreen) {
+                    request.fromBackgroundIsImage = (fromMode->background.selectedMode == "image");
+                    request.fromBgR = fromMode->background.color.r;
+                    request.fromBgG = fromMode->background.color.g;
+                    request.fromBgB = fromMode->background.color.b;
+                    request.fromBorderEnabled = fromMode->border.enabled;
+                    request.fromBorderR = fromMode->border.color.r;
+                    request.fromBorderG = fromMode->border.color.g;
+                    request.fromBorderB = fromMode->border.color.b;
+                    request.fromBorderWidth = fromMode->border.width;
+                    request.fromBorderRadius = fromMode->border.radius;
                 }
-            }
-            request.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
-
-            if (transitionState.active && transitionState.moveProgress < 1.0f) {
-                request.mirrorSlideProgress = transitionState.moveProgress;
-            } else {
-                request.mirrorSlideProgress = 1.0f;
             }
 
             if (isAnimating && transitionState.gameTransition == GameTransitionType::Bounce) {
@@ -2897,52 +4081,53 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             SubmitFrameForRendering(request);
         }
 
-        // Note: EyeZoom rendering is now done entirely on the render thread via RT_RenderEyeZoom
-        // using the synchronized ready frame from mirror thread for flicker-free capture
+        {
+            // Note: EyeZoom rendering is now done entirely on the render thread via RT_RenderEyeZoom
+            // using the synchronized ready frame from mirror thread for flicker-free capture
 
-        // This introduces 1 frame of latency for overlays but keeps the main thread fast
-        CompletedRenderFrame completed = GetCompletedRenderFrame();
-        GLuint completedTexture = completed.texture;
-        if (completedTexture != 0) {
-            PROFILE_SCOPE_CAT("Blit Async Overlay Result", "Rendering");
+            // This introduces 1 frame of latency for overlays but keeps the main thread fast
+            CompletedRenderFrame completed = GetCompletedRenderFrame();
+            GLuint completedTexture = completed.texture;
+            if (completedTexture != 0) {
+                PROFILE_SCOPE_CAT("Blit Async Overlay Result", "Rendering");
 
-            // Wait on the render thread's fence to ensure texture is fully rendered
-            // glWaitSync is a GPU-side wait that doesn't block the CPU like glFinish
-            GLsync fence = completed.fence;
-            // NOTE: Under very high FPS / scheduler jitter, a fence can be rotated out and deleted
-            // by the render thread before we reach glWaitSync (TOCTOU). glIsSync guards against
-            if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
+                // Wait on the render thread's fence to ensure texture is fully rendered
+                // glWaitSync is a GPU-side wait that doesn't block the CPU like glFinish
+                GLsync fence = completed.fence;
+                // NOTE: Under very high FPS / scheduler jitter, a fence can be rotated out and deleted
+                // by the render thread before we reach glWaitSync (TOCTOU). glIsSync guards against
+                if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
 
-            // Memory barrier to ensure we see the latest texture data from render thread
-            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+                // Memory barrier to ensure we see the latest texture data from render thread
+                glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
 
-            glBindVertexArray(g_fullscreenQuadVAO);
-            glActiveTexture(GL_TEXTURE0);
-            BindTextureDirect(GL_TEXTURE_2D, completedTexture);
+                glBindVertexArray(g_fullscreenQuadVAO);
+                glActiveTexture(GL_TEXTURE0);
+                BindTextureDirect(GL_TEXTURE_2D, completedTexture);
 
-            glUseProgram(g_backgroundProgram);
-            glUniform1f(g_backgroundShaderLocs.opacity, 1.0f);
+                glUseProgram(g_backgroundProgram);
+                glUniform1f(g_backgroundShaderLocs.opacity, 1.0f);
 
-            // The render_thread output is NOT premultiplied (ImGui OpenGL3 backend + our shaders output straight alpha).
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                // The render_thread output is NOT premultiplied (ImGui OpenGL3 backend + our shaders output straight alpha).
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
 
-            glDisable(GL_BLEND);
+                glDisable(GL_BLEND);
 
-            // Publish a consumer fence for this specific completed FBO.
-            // This prevents the render thread from reusing/clearing the same texture while the GPU
-            if (completed.fboIndex >= 0) {
-                GLsync consumerFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-                SubmitRenderFBOConsumerFence(completed.fboIndex, consumerFence);
+                // Publish a consumer fence for this specific completed FBO.
+                // This prevents the render thread from reusing/clearing the same texture while the GPU
+                if (completed.fboIndex >= 0) {
+                    GLsync consumerFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                    SubmitRenderFBOConsumerFence(completed.fboIndex, consumerFence);
+                }
+
+                // Publish a fence for the completed overlay presentation so SwapBuffers can optionally wait on it.
+                if (g_config.debug.delayRenderingUntilBlitted) {
+                    PublishOverlayCompletionFence();
+                }
             }
-
-            // Create fence after blit for delayRenderingUntilBlitted setting
-            // Delete any existing fence first (shouldn't happen normally, but be safe)
-            GLsync oldFence = g_overlayBlitFence.exchange(nullptr, std::memory_order_acq_rel);
-            if (oldFence && glIsSync(oldFence)) { glDeleteSync(oldFence); }
-            g_overlayBlitFence.store(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), std::memory_order_release);
         }
     }
 
@@ -3052,8 +4237,6 @@ void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, 
     if (!g_overlayTextFont) {
         g_overlayTextFont = io.Fonts->AddFontDefault();
     }
-
-    (void)io.Fonts->Build();
 }
 
 void SetOverlayTextFontSize(int sizePixels) {

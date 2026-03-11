@@ -346,6 +346,7 @@ struct DebugGlobalConfig {
     bool showTextureGrid = false;
     bool delayRenderingUntilFinished = false;
     bool delayRenderingUntilBlitted = false;  // Wait on async overlay blit fence before SwapBuffers
+    bool sameThreadRenderPipeline = false;    // Render screen overlays directly on the SwapBuffers thread
     bool virtualCameraEnabled = false;        // Output to OBS Virtual Camera driver
 
     bool logModeSwitch = false;

@@ -3487,8 +3487,8 @@ static void RenderThreadFunc(void* gameGLContext) {
                 s_cachedActiveModeId = request.modeId;
                 s_cachedActiveImagesVisible = imagesVisible;
                 s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
-                RT_CollectActiveElements(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
-                                         s_cachedActiveWindowOverlays);
+                CollectActiveElementsForMode(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
+                                             s_cachedActiveWindowOverlays);
             }
 
             const std::vector<MirrorConfig>& activeMirrors = s_cachedActiveMirrors;
@@ -3673,7 +3673,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 std::vector<MirrorConfig> eyeZoomMirrors;
                 std::vector<ImageConfig> unusedImages;
                 std::vector<const WindowOverlayConfig*> unusedOverlays;
-                RT_CollectActiveElements(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays);
+                CollectActiveElementsForMode(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays);
 
                 std::vector<MirrorConfig> mirrorsToSlideOut;
                 for (const auto& ezMirror : eyeZoomMirrors) {
@@ -3704,7 +3704,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 std::vector<MirrorConfig> fromModeMirrors;
                 std::vector<ImageConfig> unusedImages;
                 std::vector<const WindowOverlayConfig*> unusedOverlays;
-                RT_CollectActiveElements(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays);
+                CollectActiveElementsForMode(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays);
 
                 std::vector<MirrorConfig> mirrorsToSlideOut;
                 for (const auto& fromMirror : fromModeMirrors) {
@@ -4135,6 +4135,14 @@ static void RenderThreadFunc(void* gameGLContext) {
 }
 
 void StartRenderThread(void* gameGLContext) {
+    if (g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire)) {
+        if (g_renderThreadRunning.load(std::memory_order_acquire) || g_renderThread.joinable()) {
+            StopRenderThread();
+        }
+        Log("Render Thread: Start skipped while same-thread render pipeline is enabled");
+        return;
+    }
+
     // If thread is already running, don't start another
     if (g_renderThread.joinable()) {
         if (g_renderThreadRunning.load()) {

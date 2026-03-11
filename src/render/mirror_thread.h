@@ -24,6 +24,10 @@ extern std::atomic<bool> g_mirrorCaptureRunning;
 // Capture thread only captures while this is true - if it becomes false, capture is aborted
 extern std::atomic<bool> g_safeToCapture;
 
+// When enabled, SwapBuffers consumes the copied game texture directly for the on-screen mirror path.
+// SubmitFrameCapture publishes the ready frame immediately and skips mirror-thread queue submission.
+extern std::atomic<bool> g_sameThreadMirrorPipelineActive;
+
 // Updated by UpdateMirrorCaptureConfigs() (logic thread) and read by SwapBuffers hook to
 extern std::atomic<int> g_activeMirrorCaptureCount;
 
@@ -135,6 +139,11 @@ void StopMirrorCaptureThread();
 // Call this from main render thread each frame
 void SwapMirrorBuffers();
 
+// Render active mirror captures on the current GL thread using the shared mirror resources.
+// Returns true when at least one mirror produced a fresh front buffer during this call.
+bool RenderMirrorCapturesOnCurrentThread(const std::vector<MirrorConfig>& activeMirrors, GLuint sourceTexture, int gameW, int gameH,
+                                         int screenW, int screenH, int finalX, int finalY, int finalW, int finalH);
+
 // Update capture configs from main thread (call when active mirrors change)
 void UpdateMirrorCaptureConfigs(const std::vector<MirrorConfig>& activeMirrors);
 
@@ -158,6 +167,7 @@ void SetGlobalMirrorGammaMode(MirrorGammaMode mode);
 MirrorGammaMode GetGlobalMirrorGammaMode();
 
 void InitCaptureTexture(int width, int height);
+void EnsureCaptureTextureInitialized(int width, int height);
 void CleanupCaptureTexture();
 
 // Start async GPU blit to copy game texture (called from SwapBuffers, non-blocking)

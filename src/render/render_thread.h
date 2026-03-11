@@ -123,6 +123,10 @@ struct FrameRenderRequest {
     bool showWelcomeToast = false;
     bool welcomeToastIsFullscreen = false;
 
+    bool modeHasMirrors = false;
+    bool modeHasImages = false;
+    bool modeHasWindowOverlays = false;
+
     bool isWindowed = false;
     int windowW = 0;
     int windowH = 0;

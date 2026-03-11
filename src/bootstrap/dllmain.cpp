@@ -1344,9 +1344,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         Log("[RENDER] Shared context initialization failed - starting worker threads in fallback mode");
                     }
 
-                    // ALWAYS start worker threads. They will automatically use the pre-shared contexts if available,
-                    StartRenderThread(currentContext);
-                    StartMirrorCaptureThread(currentContext);
+                    // Screen render/mirror workers are started lazily when the active pipeline needs them.
                     StartObsHookThread();
                 }
 
@@ -1414,9 +1412,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         Log("[RENDER] Failed to reinitialize shared contexts after context change - restarting threads in fallback mode");
                     }
 
-                    // Restart worker threads regardless of shared-context init success.
-                    StartRenderThread(currentContext);
-                    StartMirrorCaptureThread(currentContext);
+                    // Screen render/mirror workers are restarted lazily by the active pipeline.
                     StartObsHookThread();
 
                     InvalidateTrackedGameTextureId(false);
@@ -1444,11 +1440,21 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                                                        g_isTransitioningFromEyeZoom.load(std::memory_order_relaxed);
                     const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
                     const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
+                    const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
+                    const bool renderThreadNeeded = !sameThreadRenderPipeline;
+                    const bool mirrorThreadNeeded = needCapture && !sameThreadRenderPipeline;
 
-                    if (!g_renderThreadRunning.load(std::memory_order_acquire)) {
+                    if (!renderThreadNeeded && g_renderThreadRunning.load(std::memory_order_acquire)) {
+                        StopRenderThread();
+                    }
+                    if (!mirrorThreadNeeded && g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
+                        StopMirrorCaptureThread();
+                    }
+
+                    if (renderThreadNeeded && !g_renderThreadRunning.load(std::memory_order_acquire)) {
                         StartRenderThread(currentContext);
                     }
-                    if (needCapture && !g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
+                    if (mirrorThreadNeeded && !g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
                         StartMirrorCaptureThread(currentContext);
                     }
                 }
@@ -1475,9 +1481,11 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             const bool needCaptureForEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
                                                g_isTransitioningFromEyeZoom.load(std::memory_order_relaxed);
             const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
+            g_sameThreadMirrorPipelineActive.store(frameCfg.debug.sameThreadRenderPipeline, std::memory_order_release);
 
             const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
-            if (needCapture) {
+            const bool needAsyncCaptureCopy = needCapture && !frameCfg.debug.sameThreadRenderPipeline;
+            if (needAsyncCaptureCopy) {
                 static auto s_lastMirrorOnlyCaptureSubmit = std::chrono::steady_clock::time_point{};
                 static int s_lastMirrorOnlyW = 0;
                 static int s_lastMirrorOnlyH = 0;
@@ -1848,10 +1856,16 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         {
             PROFILE_SCOPE_CAT("Normal Mode Handling", "Rendering");
 
-            if (needsDualRendering) {
+            const bool useAsyncDualRendering = needsDualRendering && !frameCfg.debug.sameThreadRenderPipeline;
+            if (useAsyncDualRendering) {
                 // Submit animated frame to render thread for OBS capture using helper function
                 {
                     PROFILE_SCOPE_CAT("Submit OBS Frame", "OBS");
+
+                    if (!g_renderThreadRunning.load(std::memory_order_acquire)) {
+                        HGLRC gameContext = wglGetCurrentContext();
+                        if (gameContext) { StartRenderThread(gameContext); }
+                    }
 
                     // Build lightweight context struct (no lock-free reads needed here - values already captured)
                     ObsFrameSubmission submission;

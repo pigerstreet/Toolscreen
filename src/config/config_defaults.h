@@ -110,6 +110,7 @@ constexpr bool DEBUG_GLOBAL_FAKE_CURSOR = false;
 constexpr bool DEBUG_GLOBAL_SHOW_TEXTURE_GRID = false;
 constexpr bool DEBUG_GLOBAL_DELAY_RENDERING_UNTIL_FINISHED = false;
 constexpr bool DEBUG_GLOBAL_DELAY_RENDERING_UNTIL_BLITTED = false;
+constexpr bool DEBUG_GLOBAL_SAME_THREAD_RENDER_PIPELINE = false;
 constexpr bool DEBUG_GLOBAL_LOG_MODE_SWITCH = false;
 constexpr bool DEBUG_GLOBAL_LOG_ANIMATION = false;
 constexpr bool DEBUG_GLOBAL_LOG_HOTKEY = false;
