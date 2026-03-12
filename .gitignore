@@ -20,6 +20,11 @@
 !.github/workflows/*
 !src/
 !src/**
+!out/
+!out/build/
+!out/build/bin/
+!out/build/bin/Release/
+!out/build/bin/Release/*
 
 src/json.hpp
 src/packages.config
