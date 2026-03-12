@@ -1585,15 +1585,11 @@ void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg) {
         }
     }
     // Legacy migration: old configs had a single orangeRatioTarget/tolerance
+    // Populate all 3 default targets so the user doesn't have to set them up manually
     if (cfg.targets.empty()) {
-        float legacyRatio = GetOr(tbl, "orangeRatioTarget", -1.0f);
-        if (legacyRatio >= 0.0f) {
-            PieSpikeTarget t;
-            t.name = "Migrated";
-            t.ratio = legacyRatio;
-            t.tolerance = GetOr(tbl, "tolerance", 0.03f);
-            cfg.targets.push_back(t);
-        }
+        cfg.targets.push_back({"Average", 0.33f, 0.08f, true});
+        cfg.targets.push_back({"Medium", 0.75f, 0.10f, true});
+        cfg.targets.push_back({"Big Orange", 0.90f, 0.10f, true});
     }
 
     cfg.sampleRateMs = GetOr(tbl, "sampleRateMs", ConfigDefaults::PIE_SPIKE_SAMPLE_RATE_MS);
