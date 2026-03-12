@@ -20,6 +20,8 @@
 !.github/workflows/*
 !src/
 !src/**
+!.claude-memory/
+!.claude-memory/*
 !out/
 !out/build/
 !out/build/bin/
