@@ -1585,11 +1585,14 @@ void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg) {
         }
     }
     // Legacy migration: old configs had a single orangeRatioTarget/tolerance
-    // Populate all 3 default targets so the user doesn't have to set them up manually
+    // Populate all 6 default targets so the user doesn't have to set them up manually
     if (cfg.targets.empty()) {
-        cfg.targets.push_back({"Average", 0.33f, 0.08f, true});
-        cfg.targets.push_back({"Medium", 0.75f, 0.10f, true});
-        cfg.targets.push_back({"Big Orange", 0.90f, 0.10f, true});
+        cfg.targets.push_back({"Average (hitboxes off)", 0.33f, 0.05f, true});
+        cfg.targets.push_back({"Medium (hitboxes off)", 0.74f, 0.05f, true});
+        cfg.targets.push_back({"Medium (hitboxes on)", 0.81f, 0.05f, true});
+        cfg.targets.push_back({"Big Orange (hitboxes off)", 0.91f, 0.05f, true});
+        cfg.targets.push_back({"Big Orange (hitboxes on)", 0.92f, 0.05f, true});
+        cfg.targets.push_back({"Average (hitboxes on)", 0.73f, 0.05f, true});
     }
 
     cfg.sampleRateMs = GetOr(tbl, "sampleRateMs", ConfigDefaults::PIE_SPIKE_SAMPLE_RATE_MS);

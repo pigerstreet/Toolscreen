@@ -672,7 +672,10 @@ static void CheckPieSpikeDetection() {
 
     g_pieSpikeLastOrangeRatio.store(result.orangeRatio, std::memory_order_relaxed);
 
-    if (!result.valid) return;
+    if (!result.valid) {
+        g_pieSpikeAlertActive.store(false, std::memory_order_release);
+        return;
+    }
 
     bool spikeDetected = false;
     for (const auto& t : snap->pieSpike.targets) {

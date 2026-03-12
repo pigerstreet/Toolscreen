@@ -516,19 +516,37 @@ greenReference = [ 69, 204, 101 ]
 colorThreshold = 0.15
 
 [[pieSpike.targets]]
-name = 'Average'
+name = 'Average (hitboxes off)'
 ratio = 0.33
-tolerance = 0.08
+tolerance = 0.05
 enabled = true
 
 [[pieSpike.targets]]
-name = 'Medium'
-ratio = 0.75
-tolerance = 0.10
+name = 'Medium (hitboxes off)'
+ratio = 0.74
+tolerance = 0.05
 enabled = true
 
 [[pieSpike.targets]]
-name = 'Big Orange'
-ratio = 0.90
-tolerance = 0.10
+name = 'Medium (hitboxes on)'
+ratio = 0.81
+tolerance = 0.05
+enabled = true
+
+[[pieSpike.targets]]
+name = 'Big Orange (hitboxes off)'
+ratio = 0.91
+tolerance = 0.05
+enabled = true
+
+[[pieSpike.targets]]
+name = 'Big Orange (hitboxes on)'
+ratio = 0.92
+tolerance = 0.05
+enabled = true
+
+[[pieSpike.targets]]
+name = 'Average (hitboxes on)'
+ratio = 0.73
+tolerance = 0.05
 enabled = true
