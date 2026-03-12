@@ -39,7 +39,7 @@ jobs:
         run: |
           $outputDir = 'out/build/bin/Release'
           $version = '${{ steps.version.outputs.version }}'
-          $suffix = "-$version-not-legal-for-speedruns"
+          $suffix = "-$version"
 
           $filesToRename = @(
             Join-Path $outputDir 'Toolscreen.dll'
@@ -66,7 +66,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}-not-legal-for-speedruns.dll
-            out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}-not-legal-for-speedruns.pdb
-            out/build/bin/Release/*-${{ steps.version.outputs.version }}-not-legal-for-speedruns.jar
-            out/build/bin/Release/*-${{ steps.version.outputs.version }}-not-legal-for-speedruns.exe
+            out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}.dll
+            out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}.pdb
+            out/build/bin/Release/*-${{ steps.version.outputs.version }}.jar
+            out/build/bin/Release/*-${{ steps.version.outputs.version }}.exe
