@@ -3975,41 +3975,32 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
 
-            // Pie spike alert visual flash (translucent orange full-screen overlay)
-            if (request.pieSpikeAlertTimeMs > 0) {
-                auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-                float elapsedMs = static_cast<float>(nowMs - request.pieSpikeAlertTimeMs);
-                constexpr float kFadeDurationMs = 800.0f;
-                if (elapsedMs < kFadeDurationMs) {
-                    float alpha = 0.5f * (1.0f - elapsedMs / kFadeDurationMs);
-                    if (alpha > 0.0f) {
-                        glEnable(GL_BLEND);
-                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                        glUseProgram(0);
-                        glMatrixMode(GL_PROJECTION);
-                        glPushMatrix();
-                        glLoadIdentity();
-                        glOrtho(0, request.fullW, 0, request.fullH, -1, 1);
-                        glMatrixMode(GL_MODELVIEW);
-                        glPushMatrix();
-                        glLoadIdentity();
+            // Pie spike alert — constant translucent orange overlay while spike detected
+            if (request.showPieSpikeAlert) {
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glUseProgram(0);
+                glMatrixMode(GL_PROJECTION);
+                glPushMatrix();
+                glLoadIdentity();
+                glOrtho(0, request.fullW, 0, request.fullH, -1, 1);
+                glMatrixMode(GL_MODELVIEW);
+                glPushMatrix();
+                glLoadIdentity();
 
-                        glColor4f(0.914f, 0.427f, 0.302f, alpha); // Orange (#E96D4D)
-                        glBegin(GL_QUADS);
-                        glVertex2i(0, 0);
-                        glVertex2i(request.fullW, 0);
-                        glVertex2i(request.fullW, request.fullH);
-                        glVertex2i(0, request.fullH);
-                        glEnd();
+                glColor4f(0.914f, 0.427f, 0.302f, 0.35f); // Orange (#E96D4D)
+                glBegin(GL_QUADS);
+                glVertex2i(0, 0);
+                glVertex2i(request.fullW, 0);
+                glVertex2i(request.fullW, request.fullH);
+                glVertex2i(0, request.fullH);
+                glEnd();
 
-                        glMatrixMode(GL_PROJECTION);
-                        glPopMatrix();
-                        glMatrixMode(GL_MODELVIEW);
-                        glPopMatrix();
-                        glDisable(GL_BLEND);
-                    }
-                }
+                glMatrixMode(GL_PROJECTION);
+                glPopMatrix();
+                glMatrixMode(GL_MODELVIEW);
+                glPopMatrix();
+                glDisable(GL_BLEND);
             }
 
             // Create fence to signal when GPU completes all rendering commands

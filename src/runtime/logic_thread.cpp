@@ -683,15 +683,22 @@ static void CheckPieSpikeDetection() {
             break;
         }
     }
+
+    // Visual: constant indicator — on while spike detected, off when not
+    if (snap->pieSpike.visualAlert) {
+        g_pieSpikeAlertActive.store(spikeDetected, std::memory_order_release);
+    } else {
+        g_pieSpikeAlertActive.store(false, std::memory_order_release);
+    }
+
     if (!spikeDetected) return;
 
-    // Cooldown check
+    // Sound: cooldown to prevent spam
     auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     int64_t lastAlert = g_pieSpikeLastAlertTimeMs.load(std::memory_order_relaxed);
     if (nowMs - lastAlert < snap->pieSpike.cooldownMs) return;
 
-    g_pieSpikeAlertActive.store(true, std::memory_order_release);
     g_pieSpikeLastAlertTimeMs.store(nowMs, std::memory_order_release);
 
     if (snap->pieSpike.soundAlert) {
