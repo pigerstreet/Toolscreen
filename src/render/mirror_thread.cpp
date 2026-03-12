@@ -1278,8 +1278,9 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
                 result.greenPixels = greenCount;
                 result.totalSampled = (sz / step) * (sz / step);
                 int total = orangeCount + greenCount;
-                result.orangeRatio = (total > 10) ? static_cast<float>(orangeCount) / static_cast<float>(total) : 0.0f;
-                result.valid = (total > 10);
+                constexpr int kMinColoredPixels = 500; // Pie chart produces thousands; random game pixels rarely hit this
+                result.orangeRatio = (total > kMinColoredPixels) ? static_cast<float>(orangeCount) / static_cast<float>(total) : 0.0f;
+                result.valid = (total > kMinColoredPixels);
                 g_pieSpikeResultIndex.store(writeIdx, std::memory_order_release);
             }
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
