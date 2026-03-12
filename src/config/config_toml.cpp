@@ -1586,9 +1586,10 @@ void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg) {
             }
         }
     }
-    // Legacy migration: old configs had a single orangeRatioTarget/tolerance
-    // Populate all 6 default targets so the user doesn't have to set them up manually
-    if (cfg.targets.empty()) {
+    // Migration: ensure all 6 default targets exist
+    // Old configs may have fewer targets (e.g. 3 from earlier versions)
+    if (cfg.targets.size() < 6) {
+        cfg.targets.clear();
         cfg.targets.push_back({"Pure (hitboxes off)", 0.496f, 0.05f, true});
         cfg.targets.push_back({"Pure (hitboxes on)", 0.630f, 0.05f, true});
         cfg.targets.push_back({"Chest in front (hitboxes off)", 0.655f, 0.05f, true});
