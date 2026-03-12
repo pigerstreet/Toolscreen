@@ -34,14 +34,21 @@ jobs:
         shell: cmd
         run: build.bat release --test
 
-      - name: Rename DLL and PDB with version
+      - name: Prepare upload directory
         shell: pwsh
         run: |
-          $outputDir = 'out/build/bin/Release'
           $version = '${{ steps.version.outputs.version }}'
+          $src = 'out/build/bin/Release'
+          $dst = 'upload'
+          New-Item -ItemType Directory -Path $dst -Force | Out-Null
 
-          Move-Item (Join-Path $outputDir 'Toolscreen.dll') (Join-Path $outputDir "Toolscreen-$version.dll")
-          Move-Item (Join-Path $outputDir 'Toolscreen.pdb') (Join-Path $outputDir "Toolscreen-$version.pdb")
+          Copy-Item (Join-Path $src 'Toolscreen.dll') (Join-Path $dst "Toolscreen-$version.dll")
+          Copy-Item (Join-Path $src 'Toolscreen.pdb') (Join-Path $dst "Toolscreen-$version.pdb")
+
+          # Jar and exe already have version from CMake (e.g. Toolscreen-1.1.5-double-click-me.jar)
+          Get-ChildItem $src -Filter '*.jar' | Copy-Item -Destination $dst
+          # Only copy the double-click-me exe (skip the raw EasyInject exe)
+          Get-ChildItem $src -Filter '*double-click-me*.exe' | Copy-Item -Destination $dst
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -49,8 +56,4 @@ jobs:
           name: toolscreen-v${{ steps.version.outputs.version }}
           if-no-files-found: error
           retention-days: 14
-          path: |
-            out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}.dll
-            out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}.pdb
-            out/build/bin/Release/*.jar
-            out/build/bin/Release/*.exe
+          path: upload/
