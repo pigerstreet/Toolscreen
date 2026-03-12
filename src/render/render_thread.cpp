@@ -3536,7 +3536,7 @@ static void RenderThreadFunc(void* gameGLContext) {
             const bool hasAnyVisibleOverlay = hasVisibleMirrors || hasVisibleImages || hasVisibleWindowOverlays;
 
             bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
-                                        request.showEyeZoom || request.showTextureGrid;
+                                        request.showEyeZoom || request.showTextureGrid || request.showPieSpikeAlert;
 
             // Some systems can start the render thread before a valid HWND is published,
             // which previously meant the GUI never initialized (Ctrl+I would do nothing, then ESC could crash).
