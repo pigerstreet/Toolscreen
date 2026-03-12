@@ -9,7 +9,7 @@ if (ImGui::BeginTabItem("Pie Spike")) {
         g_configIsDirty = true;
     }
     ImGui::SameLine();
-    HelpMarker("Automatically detects when the F3 pie chart shows a silverfish spawner spike (portal room).");
+    HelpMarker("Automatically detects when the F3 pie chart shows a silverfish spawner spike (portal room).\n\nReads from the 'Pie' mirror if available, otherwise falls back to manual capture offsets.");
 
     if (!g_config.pieSpike.enabled) { ImGui::BeginDisabled(); }
 

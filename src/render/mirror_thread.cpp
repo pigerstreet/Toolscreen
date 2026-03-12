@@ -1206,33 +1206,45 @@ struct MT_PieSpikeGpuResources {
     GLuint pbo = 0;
     GLsync fence = nullptr;
     bool readbackPending = false;
-    int texSize = 0;
+    int texW = 0;
+    int texH = 0;
     std::chrono::steady_clock::time_point lastSampleTime{};
 };
 
-static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex, int gameW, int gameH,
-                                     const PieSpikeConfig& cfg) {
-    if (!cfg.enabled || srcTex == 0 || gameW <= 0 || gameH <= 0) return;
+static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex, int srcW, int srcH,
+                                     const PieSpikeConfig& cfg, bool fromMirror) {
+    if (!cfg.enabled || srcTex == 0 || srcW <= 0 || srcH <= 0) return;
 
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - res.lastSampleTime).count();
     if (elapsed < cfg.sampleRateMs) return;
     res.lastSampleTime = now;
 
-    const int captureSize = (std::min)((std::min)(cfg.captureSize, gameW), gameH);
-    if (captureSize <= 0) return;
+    int capX, capY, captureW, captureH;
 
-    // Pie chart center: offsets from right/bottom edges (configurable)
-    const int pieCenterX = gameW - cfg.captureOffsetX;
-    const int pieCenterY_gl = cfg.captureOffsetY; // GL coords (Y=0 is bottom)
+    if (fromMirror) {
+        // Reading from the "Pie" mirror's texture - use the entire texture
+        capX = 0;
+        capY = 0;
+        captureW = srcW;
+        captureH = srcH;
+    } else {
+        // Legacy: reading from full game texture with offset-based positioning
+        const int captureSize = (std::min)((std::min)(cfg.captureSize, srcW), srcH);
+        if (captureSize <= 0) return;
 
-    // Clamp capture region
-    int capX = pieCenterX - captureSize / 2;
-    int capY = pieCenterY_gl - captureSize / 2;
-    if (capX < 0) capX = 0;
-    if (capY < 0) capY = 0;
-    if (capX + captureSize > gameW) capX = gameW - captureSize;
-    if (capY + captureSize > gameH) capY = gameH - captureSize;
+        const int pieCenterX = srcW - cfg.captureOffsetX;
+        const int pieCenterY_gl = cfg.captureOffsetY;
+
+        capX = pieCenterX - captureSize / 2;
+        capY = pieCenterY_gl - captureSize / 2;
+        if (capX < 0) capX = 0;
+        if (capY < 0) capY = 0;
+        if (capX + captureSize > srcW) capX = srcW - captureSize;
+        if (capY + captureSize > srcH) capY = srcH - captureSize;
+        captureW = captureSize;
+        captureH = captureSize;
+    }
 
     // === Harvest previous frame's result (non-blocking) ===
     if (res.readbackPending && res.fence) {
@@ -1241,18 +1253,19 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
             glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
             const unsigned char* mapped = static_cast<const unsigned char*>(
                 glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
-                    res.texSize * res.texSize * 4, GL_MAP_READ_BIT));
+                    static_cast<GLsizeiptr>(res.texW) * res.texH * 4, GL_MAP_READ_BIT));
             if (mapped) {
                 int orangeCount = 0, greenCount = 0;
                 const float oR = cfg.orangeReference.r, oG = cfg.orangeReference.g, oB = cfg.orangeReference.b;
                 const float gR = cfg.greenReference.r, gG = cfg.greenReference.g, gB = cfg.greenReference.b;
                 const float threshold = cfg.colorThreshold;
-                const int sz = res.texSize;
+                const int w = res.texW;
+                const int h = res.texH;
                 const int step = 2; // Sample every other pixel for speed
 
-                for (int y = 0; y < sz; y += step) {
-                    const unsigned char* row = mapped + (static_cast<size_t>(y) * sz * 4);
-                    for (int x = 0; x < sz; x += step) {
+                for (int y = 0; y < h; y += step) {
+                    const unsigned char* row = mapped + (static_cast<size_t>(y) * w * 4);
+                    for (int x = 0; x < w; x += step) {
                         const int idx = x * 4;
                         const float r = row[idx] / 255.0f;
                         const float g = row[idx + 1] / 255.0f;
@@ -1275,7 +1288,7 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
                 PieSpikeAnalysisResult& result = g_pieSpikeResults[writeIdx];
                 result.orangePixels = orangeCount;
                 result.greenPixels = greenCount;
-                result.totalSampled = (sz / step) * (sz / step);
+                result.totalSampled = (w / step) * (h / step);
                 int total = orangeCount + greenCount;
                 constexpr int kMinColoredPixels = 500; // Pie chart produces thousands; random game pixels rarely hit this
                 result.orangeRatio = (total > kMinColoredPixels) ? static_cast<float>(orangeCount) / static_cast<float>(total) : 0.0f;
@@ -1291,14 +1304,14 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
 
     // === Submit new readback ===
     // Lazy-allocate GPU resources
-    const bool sizeChanged = (res.texSize != captureSize);
+    const bool sizeChanged = (res.texW != captureW || res.texH != captureH);
 
     if (res.fbo == 0 || res.tex == 0 || sizeChanged) {
         if (res.fbo == 0) { glGenFramebuffers(1, &res.fbo); }
         if (res.tex == 0) { glGenTextures(1, &res.tex); }
 
         BindTextureDirect(GL_TEXTURE_2D, res.tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, captureSize, captureSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, captureW, captureH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         BindTextureDirect(GL_TEXTURE_2D, 0);
@@ -1311,11 +1324,12 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
     if (res.pbo == 0 || sizeChanged) {
         if (res.pbo == 0) { glGenBuffers(1, &res.pbo); }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
-        glBufferData(GL_PIXEL_PACK_BUFFER, captureSize * captureSize * 4, nullptr, GL_STREAM_READ);
+        glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(captureW) * captureH * 4, nullptr, GL_STREAM_READ);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
 
-    res.texSize = captureSize;
+    res.texW = captureW;
+    res.texH = captureH;
 
     // Clean up old fence
     if (res.fence) {
@@ -1324,21 +1338,20 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
     }
 
     // Blit source texture region into our capture FBO
-    // Need a temporary FBO to read from the source texture
     GLuint srcFbo = 0;
     glGenFramebuffers(1, &srcFbo);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, res.fbo);
-    glBlitFramebuffer(capX, capY, capX + captureSize, capY + captureSize,
-                      0, 0, captureSize, captureSize,
+    glBlitFramebuffer(capX, capY, capX + captureW, capY + captureH,
+                      0, 0, captureW, captureH,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glDeleteFramebuffers(1, &srcFbo);
 
     // Async PBO readback
     glBindFramebuffer(GL_READ_FRAMEBUFFER, res.fbo);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
-    glReadPixels(0, 0, captureSize, captureSize, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glReadPixels(0, 0, captureW, captureH, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -1852,11 +1865,39 @@ static void MirrorCaptureThreadFunc(void* unused) {
             // Note: OBS capture is done synchronously in CaptureToObsFBO (dllmain.cpp)
             // which includes animations and overlays applied by the game thread
 
-            // Pie spike chart analysis (uses game copy texture directly)
+            // Pie spike chart analysis - prefer reading from "Pie" mirror's captured texture
             {
                 auto snap = GetConfigSnapshot();
-                if (snap && snap->pieSpike.enabled && validTexture != 0) {
-                    MT_AnalyzePieSpikeChart(pieSpikeRes, validTexture, validW, validH, snap->pieSpike);
+                if (snap && snap->pieSpike.enabled) {
+                    GLuint pieSrcTex = 0;
+                    int pieSrcW = 0, pieSrcH = 0;
+                    bool fromMirror = false;
+
+                    // Try to use the "Pie" mirror's back buffer (already captured this frame)
+                    {
+                        std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+                        auto it = g_mirrorInstances.find("Pie");
+                        if (it != g_mirrorInstances.end()) {
+                            const MirrorInstance& pieMirror = it->second;
+                            if (pieMirror.fboTextureBack != 0 && pieMirror.fbo_w > 0 && pieMirror.fbo_h > 0) {
+                                pieSrcTex = pieMirror.fboTextureBack;
+                                pieSrcW = pieMirror.fbo_w;
+                                pieSrcH = pieMirror.fbo_h;
+                                fromMirror = true;
+                            }
+                        }
+                    }
+
+                    // Fallback to game texture with manual offsets if "Pie" mirror not available
+                    if (!fromMirror && validTexture != 0) {
+                        pieSrcTex = validTexture;
+                        pieSrcW = validW;
+                        pieSrcH = validH;
+                    }
+
+                    if (pieSrcTex != 0) {
+                        MT_AnalyzePieSpikeChart(pieSpikeRes, pieSrcTex, pieSrcW, pieSrcH, snap->pieSpike, fromMirror);
+                    }
                 }
             }
 
