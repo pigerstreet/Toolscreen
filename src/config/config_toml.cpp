@@ -1149,6 +1149,7 @@ void DebugGlobalConfigToToml(const DebugGlobalConfig& cfg, toml::table& out) {
     out.insert("delayRenderingUntilFinished", cfg.delayRenderingUntilFinished);
     out.insert("delayRenderingUntilBlitted", cfg.delayRenderingUntilBlitted);
     out.insert("sameThreadRenderPipeline", cfg.sameThreadRenderPipeline);
+    out.insert("sameThreadDedicatedObsTexture", cfg.sameThreadDedicatedObsTexture);
     out.insert("virtualCameraEnabled", cfg.virtualCameraEnabled);
 
     out.insert("logModeSwitch", cfg.logModeSwitch);
@@ -1174,6 +1175,8 @@ void DebugGlobalConfigFromToml(const toml::table& tbl, DebugGlobalConfig& cfg) {
         GetOr(tbl, "delayRenderingUntilFinished", ConfigDefaults::DEBUG_GLOBAL_DELAY_RENDERING_UNTIL_FINISHED);
     cfg.delayRenderingUntilBlitted = GetOr(tbl, "delayRenderingUntilBlitted", ConfigDefaults::DEBUG_GLOBAL_DELAY_RENDERING_UNTIL_BLITTED);
     cfg.sameThreadRenderPipeline = GetOr(tbl, "sameThreadRenderPipeline", ConfigDefaults::DEBUG_GLOBAL_SAME_THREAD_RENDER_PIPELINE);
+    cfg.sameThreadDedicatedObsTexture =
+        GetOr(tbl, "sameThreadDedicatedObsTexture", ConfigDefaults::DEBUG_GLOBAL_SAME_THREAD_DEDICATED_OBS_TEXTURE);
     cfg.virtualCameraEnabled = GetOr(tbl, "virtualCameraEnabled", false);
 
     cfg.logModeSwitch = GetOr(tbl, "logModeSwitch", ConfigDefaults::DEBUG_GLOBAL_LOG_MODE_SWITCH);

@@ -13,6 +13,7 @@
 #include "features/window_overlay.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
+#include <cctype>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -28,6 +29,15 @@ static std::unordered_map<std::string, size_t> s_windowOverlayLookupCache;
 static std::atomic<uint64_t> s_configCacheVersion{ 0 };
 static uint64_t s_lastCacheRebuildVersion = 0;
 static std::mutex s_lookupCacheMutex;
+
+static std::string MakeLowercaseKey(const std::string& value) {
+    std::string lowered;
+    lowered.reserve(value.size());
+    for (unsigned char ch : value) {
+        lowered.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    return lowered;
+}
 
 static void RebuildConfigLookupCaches() {
     s_mirrorLookupCache.clear();
@@ -72,6 +82,7 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
 
     static uint64_t s_cachedConfigVersion = 0;
     static std::unordered_map<std::string, const ModeConfig*> s_modeById;
+    static std::unordered_map<std::string, const ModeConfig*> s_modeByIdLowered;
     static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
     static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
     static std::unordered_map<std::string, const ImageConfig*> s_imageByName;
@@ -80,13 +91,18 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     if (s_cachedConfigVersion != configVersion) {
         s_cachedConfigVersion = configVersion;
         s_modeById.clear();
+        s_modeByIdLowered.clear();
         s_mirrorByName.clear();
         s_groupByName.clear();
         s_imageByName.clear();
         s_windowOverlayByName.clear();
 
         s_modeById.reserve(config.modes.size());
-        for (const auto& m : config.modes) { s_modeById[m.id] = &m; }
+        s_modeByIdLowered.reserve(config.modes.size());
+        for (const auto& m : config.modes) {
+            s_modeById[m.id] = &m;
+            s_modeByIdLowered[MakeLowercaseKey(m.id)] = &m;
+        }
 
         s_mirrorByName.reserve(config.mirrors.size());
         for (const auto& m : config.mirrors) { s_mirrorByName[m.name] = &m; }
@@ -105,11 +121,9 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     if (auto it = s_modeById.find(modeId); it != s_modeById.end()) {
         mode = it->second;
     } else {
-        for (const auto& kv : s_modeById) {
-            if (EqualsIgnoreCase(kv.first, modeId)) {
-                mode = kv.second;
-                break;
-            }
+        auto loweredIt = s_modeByIdLowered.find(MakeLowercaseKey(modeId));
+        if (loweredIt != s_modeByIdLowered.end()) {
+            mode = loweredIt->second;
         }
     }
     if (!mode) return;
@@ -251,6 +265,8 @@ GLuint g_debugVAO = 0;
 GLuint g_debugVBO = 0;
 GLuint g_sceneFBO = 0;
 GLuint g_sceneTexture = 0;
+static GLsizeiptr g_vboCapacityBytes = 0;
+
 int g_sceneW = 0;
 int g_sceneH = 0;
 
@@ -304,6 +320,19 @@ struct EyeZoomTextLabel {
 };
 static std::vector<EyeZoomTextLabel> s_eyezoomTextLabels;
 static std::mutex s_eyezoomTextMutex;
+
+static void EnsureSharedVertexBufferCapacity(GLsizeiptr requiredBytes) {
+    if (g_vbo == 0 || requiredBytes <= 0 || requiredBytes <= g_vboCapacityBytes) { return; }
+
+    GLsizeiptr newCapacityBytes = g_vboCapacityBytes > 0 ? g_vboCapacityBytes : static_cast<GLsizeiptr>(sizeof(float) * 192);
+    while (newCapacityBytes < requiredBytes) {
+        newCapacityBytes *= 2;
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glBufferData(GL_ARRAY_BUFFER, newCapacityBytes, nullptr, GL_DYNAMIC_DRAW);
+    g_vboCapacityBytes = newCapacityBytes;
+}
 
 struct TextureGridLabel {
     GLuint textureId;
@@ -362,6 +391,7 @@ void DrawOverlayBorder(float nx1, float ny1, float nx2, float ny2, float borderW
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(allBorders), allBorders);
     glDrawArrays(GL_TRIANGLES, 0, 24);
 
+                g_vboCapacityBytes = 0;
     if (drawCorners) {
         float cornerSize = borderWidth * 2.5f;
         float cornerSizeH = borderHeight * 2.5f;
@@ -472,6 +502,7 @@ void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, c
                 };
                 arcVerts.insert(arcVerts.end(), std::begin(tri), std::end(tri));
             }
+            EnsureSharedVertexBufferCapacity(static_cast<GLsizeiptr>(arcVerts.size() * sizeof(float)));
             glBufferSubData(GL_ARRAY_BUFFER, 0, arcVerts.size() * sizeof(float), arcVerts.data());
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(arcVerts.size() / 4));
         };
@@ -1646,6 +1677,7 @@ void InitializeGPUResources() {
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 192, nullptr, GL_DYNAMIC_DRAW);
+    g_vboCapacityBytes = sizeof(float) * 192;
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
@@ -2878,6 +2910,8 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
                                       request.showTextureGrid || request.showEyeZoom;
     if (!shouldRenderAnyImGui) return;
 
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+
     Profiler::ScopedPause profilerPause(Profiler::GetInstance());
 
     HWND hwnd = g_minecraftHwnd.load();
@@ -3399,12 +3433,14 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         if (!evenVerts.empty()) {
             glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor1.r, zoomConfig.gridColor1.g, zoomConfig.gridColor1.b,
                         zoomConfig.gridColor1Opacity * overlayOpacityScale);
+            EnsureSharedVertexBufferCapacity(static_cast<GLsizeiptr>(evenVerts.size() * sizeof(float)));
             glBufferSubData(GL_ARRAY_BUFFER, 0, evenVerts.size() * sizeof(float), evenVerts.data());
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(evenVerts.size() / 4));
         }
         if (!oddVerts.empty()) {
             glUniform4f(g_solidColorShaderLocs.color, zoomConfig.gridColor2.r, zoomConfig.gridColor2.g, zoomConfig.gridColor2.b,
                         zoomConfig.gridColor2Opacity * overlayOpacityScale);
+            EnsureSharedVertexBufferCapacity(static_cast<GLsizeiptr>(oddVerts.size() * sizeof(float)));
             glBufferSubData(GL_ARRAY_BUFFER, 0, oddVerts.size() * sizeof(float), oddVerts.data());
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(oddVerts.size() / 4));
         }
@@ -3848,6 +3884,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
+    const bool sameThreadDedicatedObsTexture =
+        sameThreadRenderPipeline && g_config.debug.sameThreadDedicatedObsTexture && g_graphicsHookDetected.load(std::memory_order_acquire);
     g_sameThreadMirrorPipelineActive.store(sameThreadRenderPipeline, std::memory_order_release);
     if (!UpdateMirrorAsyncResourceMode(nullptr, sameThreadRenderPipeline)) {
         glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
@@ -3861,7 +3899,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
             StopMirrorCaptureThread();
         }
-        if (g_renderThreadRunning.load(std::memory_order_acquire)) {
+        if (!sameThreadDedicatedObsTexture && g_renderThreadRunning.load(std::memory_order_acquire)) {
             StopRenderThread();
         }
     }
@@ -3886,12 +3924,12 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
         if (!useFramebufferFallback && g_graphicsHookDetected.load()) { StartObsHookThread(); }
 
-        const bool renderThreadNeeded = !sameThreadRenderPipeline;
+        const bool renderThreadNeeded = !sameThreadRenderPipeline || sameThreadDedicatedObsTexture;
 
         // Auto-start render thread when the async screen path or OBS/virtual-camera path needs it.
         if (renderThreadNeeded && !g_renderThreadRunning.load()) {
             HGLRC gameContext = wglGetCurrentContext();
-            if (gameContext) { StartRenderThread(gameContext); }
+            if (gameContext) { StartRenderThread(gameContext, sameThreadDedicatedObsTexture); }
         }
 
         // NOTE: Mirror capture config updates are now handled by logic_thread (UpdateActiveMirrorConfigs)
@@ -4629,6 +4667,7 @@ void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, C
 }
 
 void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, float scaleFactor) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
     if (!ImGui::GetCurrentContext()) return;
 
     ImGuiIO& io = ImGui::GetIO();

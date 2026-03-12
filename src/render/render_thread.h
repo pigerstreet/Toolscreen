@@ -46,6 +46,7 @@ struct FrameRenderRequest {
     bool excludeOnlyOnMyScreen = false;
     bool skipAnimation = false;
     bool relativeStretching = false;
+    bool preferDirectGameTexture = false;
 
     float transitionProgress = 1.0f;
     int fromX = 0;
@@ -139,7 +140,7 @@ extern std::atomic<uint64_t> g_renderFrameNumber;
 extern std::atomic<bool> g_eyeZoomFontNeedsReload;
 
 // Start the render thread (call from main thread after GL context is available)
-void StartRenderThread(void* gameGLContext);
+void StartRenderThread(void* gameGLContext, bool allowSameThreadMode = false);
 
 // Stop the render thread (call before DLL unload)
 void StopRenderThread();
@@ -199,6 +200,7 @@ struct ObsFrameContext {
     bool isRawWindowedMode = false;
     int windowW = 0;
     int windowH = 0;
+    bool preferDirectGameTexture = false;
 
     bool shouldRenderGui = false;
     bool showPerformanceOverlay = false;

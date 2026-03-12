@@ -166,6 +166,14 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
         }
         ImGui::SameLine();
         HelpMarker(trc("settings.tooltip.same_thread_render_pipeline"));
+        ImGui::BeginDisabled(!g_config.debug.sameThreadRenderPipeline);
+        if (ImGui::Checkbox(trc("settings.same_thread_dedicated_obs_texture"), &g_config.debug.sameThreadDedicatedObsTexture)) {
+            if (!g_config.debug.sameThreadDedicatedObsTexture) { StopRenderThread(); }
+            g_configIsDirty = true;
+        }
+        ImGui::SameLine();
+        HelpMarker(trc("settings.tooltip.same_thread_dedicated_obs_texture"));
+        ImGui::EndDisabled();
         ImGui::Spacing();
         if (ImGui::Checkbox(trc("settings.show_performance_overlay"), &g_config.debug.showPerformanceOverlay)) { g_configIsDirty = true; }
         if (ImGui::Checkbox(trc("settings.show_profiler"), &g_config.debug.showProfiler)) { g_configIsDirty = true; }

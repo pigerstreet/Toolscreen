@@ -1,5 +1,6 @@
 #include "obs_thread.h"
 #include "common/profiler.h"
+#include "mirror_thread.h"
 #include "render_thread.h"
 #include "common/utils.h"
 #include <mutex>
@@ -33,6 +34,26 @@ static GLuint g_obsCaptureFBO = 0;
 static GLuint g_obsCaptureTexture = 0;
 static int g_obsCaptureWidth = 0;
 static int g_obsCaptureHeight = 0;
+static GLuint g_obsRedirectAttachedTexture = 0;
+
+static GLuint SelectObsRedirectTexture(bool allowDedicatedObsTexture, GLsync& outFence, bool& outNeedsFenceWait) {
+    outFence = nullptr;
+    outNeedsFenceWait = false;
+
+    if (allowDedicatedObsTexture) {
+        GLuint obsTexture = GetCompletedObsTexture();
+        if (obsTexture != 0) {
+            outFence = GetCompletedObsFence();
+            outNeedsFenceWait = true;
+            return obsTexture;
+        }
+    }
+
+    GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
+    if (overrideTexture != 0) { return overrideTexture; }
+
+    return 0;
+}
 
 static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                                             GLint dstY1, GLbitfield mask, GLenum filter) {
@@ -41,52 +62,43 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
 
         if (readFBO == 0) {
-            // First try the render thread's animated texture
-            GLuint obsTexture = GetCompletedObsTexture();
-
-            // Fall back to the captured backbuffer texture if render thread texture isn't ready
-            if (obsTexture == 0) { obsTexture = g_obsOverrideTexture.load(std::memory_order_acquire); }
-
-            // mode transition because the render thread hasn't completed yet
-            if (obsTexture == 0) {
-                static bool s_firstFrameLogged = false;
-                for (int i = 0; i < 10 && obsTexture == 0; i++) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    obsTexture = GetCompletedObsTexture();
-                    if (obsTexture == 0) { obsTexture = g_obsOverrideTexture.load(std::memory_order_acquire); }
-                }
-                if (obsTexture != 0 && !s_firstFrameLogged) {
-                    s_firstFrameLogged = true;
-                }
-            }
+            const bool sameThreadRenderPipeline = g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire);
+            const bool allowDedicatedObsTexture = !sameThreadRenderPipeline || g_renderThreadRunning.load(std::memory_order_acquire);
+            GLsync obsFence = nullptr;
+            bool needsFenceWait = false;
+            GLuint obsTexture = SelectObsRedirectTexture(allowDedicatedObsTexture, obsFence, needsFenceWait);
 
             if (obsTexture != 0) {
                 PROFILE_SCOPE_CAT("OBS Capture Redirect", "OBS Hook");
 
-                // Wait on the render thread's fence to ensure texture is fully rendered
-                // glWaitSync is a GPU-side wait that doesn't block the CPU like glFinish
-                GLsync fence = GetCompletedObsFence();
-                if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
+                if (needsFenceWait && obsFence && glIsSync(obsFence)) { glWaitSync(obsFence, 0, GL_TIMEOUT_IGNORED); }
 
-                // Memory barrier to ensure we see the latest texture data from render thread
-                glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+                if (needsFenceWait) { glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT); }
 
-                if (g_obsRedirectFBO == 0) { glGenFramebuffers(1, &g_obsRedirectFBO); }
+                if (g_obsRedirectFBO == 0) {
+                    glGenFramebuffers(1, &g_obsRedirectFBO);
+                    g_obsRedirectAttachedTexture = 0;
+                }
 
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, g_obsRedirectFBO);
-                glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, obsTexture, 0);
+                if (g_obsRedirectAttachedTexture != obsTexture) {
+                    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, obsTexture, 0);
 
-                GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
-                if (status != GL_FRAMEBUFFER_COMPLETE) {
-                    static GLenum lastLoggedStatus = GL_FRAMEBUFFER_COMPLETE;
-                    if (status != lastLoggedStatus) {
-                        Log("[OBS Hook] WARNING: Redirect FBO incomplete! Status: " + std::to_string(status) +
-                            ", Texture: " + std::to_string(obsTexture));
-                        lastLoggedStatus = status;
+                    GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+                    if (status != GL_FRAMEBUFFER_COMPLETE) {
+                        static GLenum lastLoggedStatus = GL_FRAMEBUFFER_COMPLETE;
+                        if (status != lastLoggedStatus) {
+                            Log("[OBS Hook] WARNING: Redirect FBO incomplete! Status: " + std::to_string(status) +
+                                ", Texture: " + std::to_string(obsTexture));
+                            lastLoggedStatus = status;
+                        }
+                        g_obsRedirectAttachedTexture = 0;
+                        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+                        Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+                        return;
                     }
-                    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-                    Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-                    return;
+
+                    g_obsRedirectAttachedTexture = obsTexture;
                 }
 
                 GLint blitSrcX0 = srcX0, blitSrcY0 = srcY0, blitSrcX1 = srcX1, blitSrcY1 = srcY1;
@@ -259,6 +271,7 @@ void StopObsHookThread() {
     if (g_obsRedirectFBO != 0) {
         glDeleteFramebuffers(1, &g_obsRedirectFBO);
         g_obsRedirectFBO = 0;
+        g_obsRedirectAttachedTexture = 0;
     }
 
     g_obsHookInitialized.store(false);

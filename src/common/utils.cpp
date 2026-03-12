@@ -1672,7 +1672,13 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
 
     const bool lctrl_down = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
     const bool rctrl_down = (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
+    const bool lshift_down = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
+    const bool rshift_down = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
+    const bool lalt_down = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0;
+    const bool ralt_down = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
     const bool ctrl_down_now = lctrl_down || rctrl_down;
+    const bool shift_down_now = lshift_down || rshift_down;
+    const bool alt_down_now = lalt_down || ralt_down;
 
     // For trigger on release, skip exclusion key checks since user may have released modifiers
     if (!triggerOnRelease) {
@@ -1684,6 +1690,18 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                 excludedPressed = lctrl_down;
             } else if (excluded_key == VK_RCONTROL) {
                 excludedPressed = rctrl_down;
+            } else if (excluded_key == VK_SHIFT) {
+                excludedPressed = shift_down_now;
+            } else if (excluded_key == VK_LSHIFT) {
+                excludedPressed = lshift_down;
+            } else if (excluded_key == VK_RSHIFT) {
+                excludedPressed = rshift_down;
+            } else if (excluded_key == VK_MENU) {
+                excludedPressed = alt_down_now;
+            } else if (excluded_key == VK_LMENU) {
+                excludedPressed = lalt_down;
+            } else if (excluded_key == VK_RMENU) {
+                excludedPressed = ralt_down;
             } else {
                 excludedPressed = (GetAsyncKeyState(excluded_key) & 0x8000) != 0;
             }
@@ -1752,23 +1770,19 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
             main_key_pressed = (wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT);
             break;
         case VK_LSHIFT:
-            main_key_pressed = (wParam == VK_LSHIFT) ||
-                               (wParam == VK_SHIFT && (triggerOnRelease ? true : (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_LSHIFT) || (wParam == VK_SHIFT && (triggerOnRelease ? true : lshift_down));
             break;
         case VK_RSHIFT:
-            main_key_pressed = (wParam == VK_RSHIFT) ||
-                               (wParam == VK_SHIFT && (triggerOnRelease ? true : (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_RSHIFT) || (wParam == VK_SHIFT && (triggerOnRelease ? true : rshift_down));
             break;
         case VK_MENU:
             main_key_pressed = (wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU);
             break;
         case VK_LMENU:
-            main_key_pressed = (wParam == VK_LMENU) ||
-                               (wParam == VK_MENU && (triggerOnRelease ? true : (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_LMENU) || (wParam == VK_MENU && (triggerOnRelease ? true : lalt_down));
             break;
         case VK_RMENU:
-            main_key_pressed = (wParam == VK_RMENU) ||
-                               (wParam == VK_MENU && (triggerOnRelease ? true : (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_RMENU) || (wParam == VK_MENU && (triggerOnRelease ? true : ralt_down));
             break;
         default:
             break;
@@ -1783,14 +1797,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     // For trigger on release, skip modifier state checks since modifiers may have been
     // released before or at the same time as the main key
     if (!triggerOnRelease) {
-        bool lshift_down = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
-        bool rshift_down = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
-        bool lalt_down = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0;
-        bool ralt_down = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
-
-        bool shift_down_now = lshift_down || rshift_down;
-        bool alt_down_now = lalt_down || ralt_down;
-
         if (s_enableHotkeyDebug) {
             Log("[Hotkey] Modifiers - Need: LCtrl=" + std::to_string(requires_lctrl) + " RCtrl=" + std::to_string(requires_rctrl) +
                 " Ctrl=" + std::to_string(requires_ctrl) + " LShift=" + std::to_string(requires_lshift) + " RShift=" +
@@ -1849,33 +1855,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                 }
                 return false;
             }
-        }
-
-        bool ctrl_in_exclusions = std::find_if(exclusionKeys.begin(), exclusionKeys.end(), [](DWORD k) {
-                                      return k == VK_CONTROL || k == VK_LCONTROL || k == VK_RCONTROL;
-                                  }) != exclusionKeys.end();
-        bool shift_in_exclusions = std::find_if(exclusionKeys.begin(), exclusionKeys.end(), [](DWORD k) {
-                                       return k == VK_SHIFT || k == VK_LSHIFT || k == VK_RSHIFT;
-                                   }) != exclusionKeys.end();
-        bool alt_in_exclusions = std::find_if(exclusionKeys.begin(), exclusionKeys.end(), [](DWORD k) {
-                                     return k == VK_MENU || k == VK_LMENU || k == VK_RMENU;
-                                 }) != exclusionKeys.end();
-
-        bool any_ctrl_required = requires_ctrl || requires_lctrl || requires_rctrl;
-        bool any_shift_required = requires_shift || requires_lshift || requires_rshift;
-        bool any_alt_required = requires_alt || requires_lalt || requires_ralt;
-
-        if (!any_ctrl_required && ctrl_down_now && ctrl_in_exclusions) {
-            if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Ctrl pressed but excluded");
-            return false;
-        }
-        if (!any_shift_required && shift_down_now && shift_in_exclusions) {
-            if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Shift pressed but excluded");
-            return false;
-        }
-        if (!any_alt_required && alt_down_now && alt_in_exclusions) {
-            if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Alt pressed but excluded");
-            return false;
         }
     } else {
         if (s_enableHotkeyDebug) { Log("[Hotkey] Skipping modifier checks for trigger-on-release hotkey"); }

@@ -7,6 +7,8 @@
 #include "common/utils.h"
 #include "version.h"
 #include <Windows.h>
+#include <unordered_map>
+#include <unordered_set>
 #include <thread>
 
 std::atomic<bool> g_logicThreadRunning{ false };
@@ -164,12 +166,30 @@ static int s_lastViewportScreenH = 0;
 void UpdateActiveMirrorConfigs() {
     PROFILE_SCOPE_CAT("LT Mirror Configs", "Logic Thread");
 
+    struct MirrorGroupPlacement {
+        const MirrorGroupConfig* group = nullptr;
+        const MirrorGroupItem* item = nullptr;
+    };
+
     // Use config snapshot for thread-safe access to modes/mirrors/mirrorGroups
     auto cfgSnap = GetConfigSnapshot();
     if (!cfgSnap) return;
     const Config& cfg = *cfgSnap;
 
     const uint64_t snapVer = g_configSnapshotVersion.load(std::memory_order_acquire);
+    static uint64_t s_lookupSnapshotVersion = 0;
+    static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
+    static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
+
+    if (s_lookupSnapshotVersion != snapVer) {
+        s_lookupSnapshotVersion = snapVer;
+        s_groupByName.clear();
+        s_mirrorByName.clear();
+        s_groupByName.reserve(cfg.mirrorGroups.size());
+        s_mirrorByName.reserve(cfg.mirrors.size());
+        for (const auto& group : cfg.mirrorGroups) { s_groupByName[group.name] = &group; }
+        for (const auto& mirror : cfg.mirrors) { s_mirrorByName[mirror.name] = &mirror; }
+    }
 
     // Get current mode ID from double-buffer (lock-free)
     std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
@@ -181,16 +201,26 @@ void UpdateActiveMirrorConfigs() {
     if (!mode) { return; }
 
     std::vector<std::string> currentMirrorIds = mode->mirrorIds;
+    std::unordered_set<std::string> currentMirrorIdSet(currentMirrorIds.begin(), currentMirrorIds.end());
+    currentMirrorIdSet.reserve(mode->mirrorIds.size() + (mode->mirrorGroupIds.size() * 4));
+    std::unordered_map<std::string, MirrorGroupPlacement> mirrorPlacements;
+    mirrorPlacements.reserve(currentMirrorIdSet.size() + (mode->mirrorGroupIds.size() * 4));
+
     for (const auto& groupName : mode->mirrorGroupIds) {
-        for (const auto& group : cfg.mirrorGroups) {
-            if (group.name == groupName) {
-                for (const auto& item : group.mirrors) {
-                    if (std::find(currentMirrorIds.begin(), currentMirrorIds.end(), item.mirrorId) == currentMirrorIds.end()) {
-                        currentMirrorIds.push_back(item.mirrorId);
-                    }
-                }
-                break;
+        auto groupIt = s_groupByName.find(groupName);
+        if (groupIt == s_groupByName.end() || !groupIt->second) {
+            continue;
+        }
+
+        const MirrorGroupConfig& group = *groupIt->second;
+        for (const auto& item : group.mirrors) {
+            if (!item.enabled) continue;
+
+            if (currentMirrorIdSet.insert(item.mirrorId).second) {
+                currentMirrorIds.push_back(item.mirrorId);
             }
+
+            mirrorPlacements.try_emplace(item.mirrorId, MirrorGroupPlacement{ &group, &item });
         }
     }
 
@@ -198,49 +228,43 @@ void UpdateActiveMirrorConfigs() {
         std::vector<MirrorConfig> activeMirrorsForCapture;
         activeMirrorsForCapture.reserve(currentMirrorIds.size());
         for (const auto& mirrorId : currentMirrorIds) {
-            for (const auto& mirror : cfg.mirrors) {
-                if (mirror.name == mirrorId) {
-                    MirrorConfig activeMirror = mirror;
+            auto mirrorIt = s_mirrorByName.find(mirrorId);
+            if (mirrorIt == s_mirrorByName.end() || !mirrorIt->second) {
+                continue;
+            }
 
-                    for (const auto& groupName : mode->mirrorGroupIds) {
-                        for (const auto& group : cfg.mirrorGroups) {
-                            if (group.name == groupName) {
-                                for (const auto& item : group.mirrors) {
-                                    if (!item.enabled) continue;
-                                    if (item.mirrorId == mirrorId) {
-                                        int groupX = group.output.x;
-                                        int groupY = group.output.y;
-                                        if (group.output.useRelativePosition) {
-                                            int screenW = GetCachedWindowWidth();
-                                            int screenH = GetCachedWindowHeight();
-                                            groupX = static_cast<int>(group.output.relativeX * screenW);
-                                            groupY = static_cast<int>(group.output.relativeY * screenH);
-                                        }
-                                        activeMirror.output.x = groupX + item.offsetX;
-                                        activeMirror.output.y = groupY + item.offsetY;
-                                        activeMirror.output.relativeTo = group.output.relativeTo;
-                                        activeMirror.output.useRelativePosition = group.output.useRelativePosition;
-                                        activeMirror.output.relativeX = group.output.relativeX;
-                                        activeMirror.output.relativeY = group.output.relativeY;
-                                        if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
-                                            activeMirror.output.separateScale = true;
-                                            float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
-                                            float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
-                                            activeMirror.output.scaleX = baseScaleX * item.widthPercent;
-                                            activeMirror.output.scaleY = baseScaleY * item.heightPercent;
-                                        }
-                                        break;
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
+            const MirrorConfig& mirror = *mirrorIt->second;
+            MirrorConfig activeMirror = mirror;
 
-                    activeMirrorsForCapture.push_back(activeMirror);
-                    break;
+            auto placementIt = mirrorPlacements.find(mirrorId);
+            if (placementIt != mirrorPlacements.end() && placementIt->second.group && placementIt->second.item) {
+                const MirrorGroupConfig& group = *placementIt->second.group;
+                const MirrorGroupItem& item = *placementIt->second.item;
+
+                int groupX = group.output.x;
+                int groupY = group.output.y;
+                if (group.output.useRelativePosition) {
+                    int screenW = GetCachedWindowWidth();
+                    int screenH = GetCachedWindowHeight();
+                    groupX = static_cast<int>(group.output.relativeX * screenW);
+                    groupY = static_cast<int>(group.output.relativeY * screenH);
+                }
+                activeMirror.output.x = groupX + item.offsetX;
+                activeMirror.output.y = groupY + item.offsetY;
+                activeMirror.output.relativeTo = group.output.relativeTo;
+                activeMirror.output.useRelativePosition = group.output.useRelativePosition;
+                activeMirror.output.relativeX = group.output.relativeX;
+                activeMirror.output.relativeY = group.output.relativeY;
+                if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
+                    activeMirror.output.separateScale = true;
+                    float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
+                    float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
+                    activeMirror.output.scaleX = baseScaleX * item.widthPercent;
+                    activeMirror.output.scaleY = baseScaleY * item.heightPercent;
                 }
             }
+
+            activeMirrorsForCapture.push_back(activeMirror);
         }
         UpdateMirrorCaptureConfigs(activeMirrorsForCapture);
         s_lastActiveMirrorIds = currentMirrorIds;

@@ -44,6 +44,10 @@ bool IsHotkeyBindingActive_UiState() {
 }
 
 void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (!IsHotkeyBindingActive_UiState() && !IsHotkeyBindingActive() && !IsRebindBindingActive()) {
+        return;
+    }
+
     static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
     if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && GetMessageExtraInfo() == kToolscreenInjectedExtraInfo) {
         return;

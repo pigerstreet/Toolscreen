@@ -13,6 +13,10 @@
 #include <algorithm>
 #include <chrono>
 
+static std::recursive_mutex s_imguiContextMutex;
+
+std::recursive_mutex& GetImGuiContextMutex() { return s_imguiContextMutex; }
+
 static std::string ResolveGuiFontPath(float baseFontSize) {
     const std::string configuredFontPath = g_config.fontPath;
 
@@ -79,6 +83,7 @@ static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
 
 static ImGuiContext* s_mainThreadImGuiContext = nullptr;
 static HWND s_mainThreadImGuiHwnd = NULL;
+static HGLRC s_mainThreadImGuiGlContext = NULL;
 
 float ComputeGuiScaleFactorFromCachedWindowSize() {
     int screenWidth = GetCachedWindowWidth();
@@ -95,6 +100,7 @@ float ComputeGuiScaleFactorFromCachedWindowSize() {
 }
 
 void HandleImGuiContextReset() {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
     if (s_mainThreadImGuiContext) {
         ImGui::SetCurrentContext(s_mainThreadImGuiContext);
         Log("Performing deferred full ImGui context reset.");
@@ -106,10 +112,19 @@ void HandleImGuiContextReset() {
         ImGui::DestroyContext(s_mainThreadImGuiContext);
         s_mainThreadImGuiContext = nullptr;
         s_mainThreadImGuiHwnd = NULL;
+        s_mainThreadImGuiGlContext = NULL;
     }
 }
 
 void InitializeImGuiContext(HWND hwnd) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+    const HGLRC currentGlContext = wglGetCurrentContext();
+    if (s_mainThreadImGuiContext != nullptr && currentGlContext != NULL && s_mainThreadImGuiGlContext != NULL &&
+        currentGlContext != s_mainThreadImGuiGlContext) {
+        Log("Main-thread ImGui detected WGL context change; recreating context.");
+        HandleImGuiContextReset();
+    }
+
     if (s_mainThreadImGuiContext == nullptr) {
         Log("Re-creating ImGui context after full reset.");
         IMGUI_CHECKVERSION();
@@ -121,6 +136,7 @@ void InitializeImGuiContext(HWND hwnd) {
         ImGui_ImplOpenGL3_Init("#version 330");
         ConfigureImGuiFontsAndStyle(ComputeGuiScaleFactorFromCachedWindowSize());
         s_mainThreadImGuiHwnd = hwnd;
+        s_mainThreadImGuiGlContext = currentGlContext;
         return;
     }
 
@@ -129,6 +145,9 @@ void InitializeImGuiContext(HWND hwnd) {
         ImGui_ImplWin32_Shutdown();
         ImGui_ImplWin32_Init(hwnd);
         s_mainThreadImGuiHwnd = hwnd;
+    }
+    if (currentGlContext != NULL) {
+        s_mainThreadImGuiGlContext = currentGlContext;
     }
 }
 
@@ -670,6 +689,8 @@ void RenderImGuiWithStateProtection(bool useFullProtection) {
 void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
     (void)hDc;
     (void)oWglSwapBuffers;
+
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
 
     if (ImGui::GetCurrentContext() == nullptr) {
         IMGUI_CHECKVERSION();

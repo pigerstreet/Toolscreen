@@ -50,6 +50,9 @@ extern std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_
 extern std::mutex g_hotkeyTimestampsMutex;
 extern std::unordered_set<DWORD> g_hotkeyMainKeys;
 extern std::mutex g_hotkeyMainKeysMutex;
+extern std::atomic<bool> g_tempSensitivityActiveAtomic;
+extern std::atomic<float> g_tempSensitivityXAtomic;
+extern std::atomic<float> g_tempSensitivityYAtomic;
 extern std::set<std::string> g_triggerOnReleasePending;
 extern std::set<std::string> g_triggerOnReleaseInvalidated;
 extern std::mutex g_triggerOnReleaseMutex;
@@ -58,21 +61,46 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT uMs
 static bool s_forcedShowCursor = false;
 static size_t s_bestMatchKeyCount = 0;
 static std::unordered_map<DWORD, size_t> s_bestMatchKeyCountByMainVk;
+static std::atomic<int> s_cachedSystemCursorVisible{ -1 };
+static std::atomic<ULONGLONG> s_cachedSystemCursorVisibilityTick{ 0 };
+
+static bool QuerySystemCursorVisibleCached() {
+    constexpr ULONGLONG kCursorVisibilityRefreshMs = 50;
+
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG lastTick = s_cachedSystemCursorVisibilityTick.load(std::memory_order_relaxed);
+    const int cachedVisible = s_cachedSystemCursorVisible.load(std::memory_order_relaxed);
+    if (cachedVisible != -1 && (now - lastTick) < kCursorVisibilityRefreshMs) {
+        return cachedVisible != 0;
+    }
+
+    CURSORINFO ci{ sizeof(CURSORINFO) };
+    if (!GetCursorInfo(&ci)) {
+        return cachedVisible > 0;
+    }
+
+    const bool isVisible = (ci.flags & CURSOR_SHOWING) != 0;
+    s_cachedSystemCursorVisible.store(isVisible ? 1 : 0, std::memory_order_relaxed);
+    s_cachedSystemCursorVisibilityTick.store(now, std::memory_order_relaxed);
+    return isVisible;
+}
 
 static void EnsureSystemCursorVisible() {
     if (g_gameVersion < GameVersion(1, 13, 0)) { return; }
 
-    CURSORINFO ci{ sizeof(CURSORINFO) };
-    if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING)) { return; }
+    if (QuerySystemCursorVisibleCached()) { return; }
     ShowCursor(TRUE);
+    s_cachedSystemCursorVisible.store(1, std::memory_order_relaxed);
+    s_cachedSystemCursorVisibilityTick.store(GetTickCount64(), std::memory_order_relaxed);
 }
 
 static void EnsureSystemCursorHidden() {
     if (g_gameVersion < GameVersion(1, 13, 0)) { return; }
 
-    CURSORINFO ci{ sizeof(CURSORINFO) };
-    if (GetCursorInfo(&ci) && !(ci.flags & CURSOR_SHOWING)) { return; }
+    if (!QuerySystemCursorVisibleCached()) { return; }
     ShowCursor(FALSE);
+    s_cachedSystemCursorVisible.store(0, std::memory_order_relaxed);
+    s_cachedSystemCursorVisibilityTick.store(GetTickCount64(), std::memory_order_relaxed);
 }
 
 static DWORD NormalizeModifierVkFromKeyMessage(DWORD rawVk, LPARAM lParam) {
@@ -127,13 +155,24 @@ static bool IsModifierScanCode(UINT scanCodeWithFlags) {
     const UINT scanLow = (scanCodeWithFlags & 0xFF);
     if (scanLow == 0) return false;
 
-    DWORD mappedVk = static_cast<DWORD>(::MapVirtualKeyW(scanCodeWithFlags, MAPVK_VSC_TO_VK_EX));
-    if (mappedVk == 0 && (scanCodeWithFlags & 0xFF00) != 0) {
-        mappedVk = static_cast<DWORD>(::MapVirtualKeyW(scanLow, MAPVK_VSC_TO_VK_EX));
+    static thread_local std::unordered_map<UINT, DWORD> s_scanCodeToModifierVk;
+
+    DWORD mappedVk = 0;
+    auto it = s_scanCodeToModifierVk.find(scanCodeWithFlags);
+    if (it != s_scanCodeToModifierVk.end()) {
+        mappedVk = it->second;
+    } else {
+        mappedVk = static_cast<DWORD>(::MapVirtualKeyW(scanCodeWithFlags, MAPVK_VSC_TO_VK_EX));
+        if (mappedVk == 0 && (scanCodeWithFlags & 0xFF00) != 0) {
+            mappedVk = static_cast<DWORD>(::MapVirtualKeyW(scanLow, MAPVK_VSC_TO_VK_EX));
+        }
+        if (mappedVk != 0) {
+            mappedVk = NormalizeModifierVkFromConfig(mappedVk, scanCodeWithFlags);
+        }
+        s_scanCodeToModifierVk.emplace(scanCodeWithFlags, mappedVk);
     }
     if (mappedVk == 0) return false;
 
-    mappedVk = NormalizeModifierVkFromConfig(mappedVk, scanCodeWithFlags);
     return IsModifierVk(mappedVk);
 }
 
@@ -321,8 +360,10 @@ InputHandlerResult HandleNonFullscreenCheck(HWND hWnd, UINT uMsg, WPARAM wParam,
 }
 
 void HandleCharLogging(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_CHAR) { return; }
+
     auto cfgSnap = GetConfigSnapshot();
-    if (uMsg == WM_CHAR && cfgSnap && cfgSnap->debug.showHotkeyDebug) {
+    if (cfgSnap && cfgSnap->debug.showHotkeyDebug) {
         Log("WM_CHAR: " + std::to_string(wParam) + " " + std::to_string(lParam));
     }
 }
@@ -927,10 +968,9 @@ void ApplyWindowsMouseSpeed();
 void RestoreKeyRepeatSettings();
 void ApplyKeyRepeatSettings();
 
-InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId) {
+InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg != WM_ACTIVATE) { return { false, 0 }; }
     PROFILE_SCOPE("HandleActivate");
-    (void)currentModeId;
 
     if (wParam == WA_INACTIVE) {
         ImGuiInputQueue_EnqueueFocus(false);
@@ -1421,6 +1461,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         g_tempSensitivityOverride.sensitivityX = 1.0f;
                         g_tempSensitivityOverride.sensitivityY = 1.0f;
                         g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
+                        g_tempSensitivityXAtomic.store(1.0f, std::memory_order_release);
+                        g_tempSensitivityYAtomic.store(1.0f, std::memory_order_release);
+                        g_tempSensitivityActiveAtomic.store(false, std::memory_order_release);
 
                         if (s_enableHotkeyDebug) { Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED OFF: " + hotkeyId); }
 
@@ -1437,6 +1480,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivity;
                     }
                     g_tempSensitivityOverride.activeSensHotkeyIndex = static_cast<int>(sensIdx);
+                    g_tempSensitivityXAtomic.store(g_tempSensitivityOverride.sensitivityX, std::memory_order_release);
+                    g_tempSensitivityYAtomic.store(g_tempSensitivityOverride.sensitivityY, std::memory_order_release);
+                    g_tempSensitivityActiveAtomic.store(true, std::memory_order_release);
 
                     if (s_enableHotkeyDebug) {
                         Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED ON: " + hotkeyId + " -> sens=" + std::to_string(sensHotkey.sensitivity));
@@ -1455,6 +1501,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                             g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivity;
                         }
                         g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
+                        g_tempSensitivityXAtomic.store(g_tempSensitivityOverride.sensitivityX, std::memory_order_release);
+                        g_tempSensitivityYAtomic.store(g_tempSensitivityOverride.sensitivityY, std::memory_order_release);
+                        g_tempSensitivityActiveAtomic.store(true, std::memory_order_release);
                     }
 
                     if (s_enableHotkeyDebug) {
@@ -2348,24 +2397,12 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
 
-    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
-        EnsureSystemCursorVisible();
-        static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
-        SetCursor(s_arrowCursor);
-    }
-    if (!g_showGui.load() && s_forcedShowCursor) {
-        EnsureSystemCursorHidden();
-        s_forcedShowCursor = false;
-    }
-
     RegisterBindingInputEvent(uMsg, wParam, lParam);
 
     // Keep all window metrics/cache updates in one place to avoid split-brain resize state.
     SyncWindowMetricsFromMessage(hWnd, uMsg, wParam, lParam);
 
     InputHandlerResult result;
-
-    result = HandleMouseMoveViewportOffset(hWnd, uMsg, wParam, lParam);
 
     result = HandleShutdownCheck(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
@@ -2376,7 +2413,25 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleToolscreenQueryMessages(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    ResolveHotkeyPriority(uMsg, wParam, lParam);
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONUP:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+        ResolveHotkeyPriority(uMsg, wParam, lParam);
+        break;
+    default:
+        s_bestMatchKeyCount = 0;
+        break;
+    }
 
     result = HandleBorderlessToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
@@ -2388,9 +2443,6 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleKeyRebindsToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    result = HandleNonFullscreenCheck(hWnd, uMsg, wParam, lParam);
-    if (result.consumed) return result.result;
-
     HandleCharLogging(uMsg, wParam, lParam);
 
     result = HandleAltF4(hWnd, uMsg, wParam, lParam);
@@ -2399,11 +2451,11 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleConfigLoadFailure(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-    std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
-
-    result = HandleSetCursor(hWnd, uMsg, wParam, lParam, localGameState);
-    if (result.consumed) return result.result;
+    if (uMsg == WM_SETCURSOR) {
+        const std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
+        result = HandleSetCursor(hWnd, uMsg, wParam, lParam, localGameState);
+        if (result.consumed) return result.result;
+    }
 
     result = HandleDestroy(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
@@ -2425,14 +2477,37 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleGuiInputBlocking(uMsg);
     if (result.consumed) return result.result;
 
-    result = HandleActivate(hWnd, uMsg, wParam, lParam, currentModeId);
+    result = HandleActivate(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    result = HandleWmSizeModeDimensions(hWnd, uMsg, wParam, lParam, currentModeId);
-    if (result.consumed) return result.result;
+    if (uMsg == WM_SIZE) {
+        const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+        result = HandleWmSizeModeDimensions(hWnd, uMsg, wParam, lParam, currentModeId);
+        if (result.consumed) return result.result;
+    }
 
-    result = HandleHotkeys(hWnd, uMsg, wParam, lParam, currentModeId, localGameState);
-    if (result.consumed) return result.result;
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP: {
+        const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+        const std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
+        result = HandleHotkeys(hWnd, uMsg, wParam, lParam, currentModeId, localGameState);
+        if (result.consumed) return result.result;
+        break;
+    }
+    default:
+        break;
+    }
 
     result = HandleMouseCoordinateTranslationPhase(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;

@@ -47,6 +47,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 std::string WideToUtf8(const std::wstring& wide_string);
 void HandleImGuiContextReset();
 void InitializeImGuiContext(HWND hwnd);
+std::recursive_mutex& GetImGuiContextMutex();
 void StartSupportersFetch();
 bool IsGuiHotkeyPressed(WPARAM wParam);
 bool IsHotkeyBindingActive();
@@ -347,6 +348,7 @@ struct DebugGlobalConfig {
     bool delayRenderingUntilFinished = false;
     bool delayRenderingUntilBlitted = false;  // Wait on async overlay blit fence before SwapBuffers
     bool sameThreadRenderPipeline = false;    // Render screen overlays directly on the SwapBuffers thread
+    bool sameThreadDedicatedObsTexture = true; // Keep OBS on a dedicated render-thread texture while screen stays same-thread
     bool virtualCameraEnabled = false;        // Output to OBS Virtual Camera driver
 
     bool logModeSwitch = false;

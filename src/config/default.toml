@@ -40,6 +40,7 @@ delayRenderingUntilBlitted = false
 delayRenderingUntilFinished = false
 fakeCursor = false
 sameThreadRenderPipeline = false
+sameThreadDedicatedObsTexture = true
 logAnimation = false
 logFileMonitor = false
 logGui = false

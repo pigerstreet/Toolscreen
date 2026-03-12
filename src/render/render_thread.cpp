@@ -11,6 +11,7 @@
 #include "common/utils.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
+#include <cctype>
 #include <unordered_map>
 #include <unordered_set>
 #include <thread>
@@ -313,6 +314,12 @@ static ObsFrameSubmission g_obsSubmissionSlots[2];
 static std::atomic<int> g_obsWriteSlot{ 0 };
 static std::atomic<int> g_obsReadSlot{ -1 }; // Slot currently being copied by render thread (-1 = none)
 static std::atomic<int> g_obsReadySlot{ -1 };
+static GLuint g_obsSubmissionSourceTextures[2] = { 0, 0 };
+static GLuint g_obsSubmissionSourceFBOs[2] = { 0, 0 };
+static int g_obsSubmissionSourceWidths[2] = { 0, 0 };
+static int g_obsSubmissionSourceHeights[2] = { 0, 0 };
+static GLuint g_obsSubmissionReadFBO = 0;
+static GLuint g_obsSubmissionReadAttachedTexture = 0;
 
 static std::mutex g_completionMutex;
 static std::condition_variable g_completionCV;
@@ -321,6 +328,87 @@ static std::atomic<bool> g_frameComplete{ false };
 static std::mutex g_obsCompletionMutex;
 static std::condition_variable g_obsCompletionCV;
 static std::atomic<bool> g_obsFrameComplete{ false };
+
+static std::string RT_MakeLowercaseKey(const std::string& value) {
+    std::string lowered;
+    lowered.reserve(value.size());
+    for (unsigned char ch : value) {
+        lowered.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    return lowered;
+}
+
+static bool RT_EnsureObsSubmissionSourceTexture(int slot, int width, int height) {
+    if (slot < 0 || slot >= 2 || width <= 0 || height <= 0) { return false; }
+
+    if (g_obsSubmissionSourceTextures[slot] != 0 && g_obsSubmissionSourceWidths[slot] == width && g_obsSubmissionSourceHeights[slot] == height) {
+        return true;
+    }
+
+    if (g_obsSubmissionSourceTextures[slot] != 0) {
+        glDeleteTextures(1, &g_obsSubmissionSourceTextures[slot]);
+        g_obsSubmissionSourceTextures[slot] = 0;
+    }
+    if (g_obsSubmissionSourceFBOs[slot] == 0) { glGenFramebuffers(1, &g_obsSubmissionSourceFBOs[slot]); }
+
+    glGenTextures(1, &g_obsSubmissionSourceTextures[slot]);
+    BindTextureDirect(GL_TEXTURE_2D, g_obsSubmissionSourceTextures[slot]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    BindTextureDirect(GL_TEXTURE_2D, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_obsSubmissionSourceFBOs[slot]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_obsSubmissionSourceTextures[slot], 0);
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        Log("Render Thread: OBS submission source FBO incomplete for slot " + std::to_string(slot) + " status=" + std::to_string(status));
+        glDeleteTextures(1, &g_obsSubmissionSourceTextures[slot]);
+        g_obsSubmissionSourceTextures[slot] = 0;
+        return false;
+    }
+
+    g_obsSubmissionSourceWidths[slot] = width;
+    g_obsSubmissionSourceHeights[slot] = height;
+    return true;
+}
+
+static bool RT_CaptureObsSubmissionSourceTexture(int slot, GLuint sourceTexture, int width, int height) {
+    if (sourceTexture == 0 || width <= 0 || height <= 0) { return false; }
+    if (!RT_EnsureObsSubmissionSourceTexture(slot, width, height)) { return false; }
+
+    GLint prevReadFBO = 0;
+    GLint prevDrawFBO = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+
+    if (g_obsSubmissionReadFBO == 0) { glGenFramebuffers(1, &g_obsSubmissionReadFBO); }
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_obsSubmissionReadFBO);
+    if (g_obsSubmissionReadAttachedTexture != sourceTexture) {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sourceTexture, 0);
+        const GLenum readStatus = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+        if (readStatus != GL_FRAMEBUFFER_COMPLETE) {
+            Log("Render Thread: OBS source read FBO incomplete for texture " + std::to_string(sourceTexture) + " status=" +
+                std::to_string(readStatus));
+            g_obsSubmissionReadAttachedTexture = 0;
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
+            return false;
+        }
+        g_obsSubmissionReadAttachedTexture = sourceTexture;
+    }
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_obsSubmissionSourceFBOs[slot]);
+    glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
+    return true;
+}
 
 static GLuint rt_eyeZoomSnapshotTexture = 0;
 static GLuint rt_eyeZoomSnapshotFBO = 0;
@@ -469,6 +557,7 @@ static void RT_ResetStyleAndApplyAppearance(float scaleFactor) {
 }
 
 static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
     if (g_renderThreadImGuiInitialized) { return true; }
     if (!hwnd) { return false; }
 
@@ -2962,6 +3051,7 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
     // These caches are safe because `config` is immutable for the lifetime of the snapshot.
     static uint64_t s_cachedConfigVersion = 0;
     static std::unordered_map<std::string, const ModeConfig*> s_modeById;
+    static std::unordered_map<std::string, const ModeConfig*> s_modeByIdLowered;
     static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
     static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
     static std::unordered_map<std::string, const ImageConfig*> s_imageByName;
@@ -2970,13 +3060,18 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
     if (s_cachedConfigVersion != configVersion) {
         s_cachedConfigVersion = configVersion;
         s_modeById.clear();
+        s_modeByIdLowered.clear();
         s_mirrorByName.clear();
         s_groupByName.clear();
         s_imageByName.clear();
         s_windowOverlayByName.clear();
 
         s_modeById.reserve(config.modes.size());
-        for (const auto& m : config.modes) { s_modeById[m.id] = &m; }
+        s_modeByIdLowered.reserve(config.modes.size());
+        for (const auto& m : config.modes) {
+            s_modeById[m.id] = &m;
+            s_modeByIdLowered[RT_MakeLowercaseKey(m.id)] = &m;
+        }
 
         s_mirrorByName.reserve(config.mirrors.size());
         for (const auto& m : config.mirrors) { s_mirrorByName[m.name] = &m; }
@@ -2995,11 +3090,9 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
     if (auto it = s_modeById.find(modeId); it != s_modeById.end()) {
         mode = it->second;
     } else {
-        for (const auto& kv : s_modeById) {
-            if (EqualsIgnoreCase(kv.first, modeId)) {
-                mode = kv.second;
-                break;
-            }
+        auto loweredIt = s_modeByIdLowered.find(RT_MakeLowercaseKey(modeId));
+        if (loweredIt != s_modeByIdLowered.end()) {
+            mode = loweredIt->second;
         }
     }
     if (!mode) return;
@@ -3137,6 +3230,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
         // Initialize ImGui on render thread
         {
+            std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
             HWND hwnd = g_minecraftHwnd.load();
             if (hwnd) {
                 IMGUI_CHECKVERSION();
@@ -3211,7 +3305,6 @@ static void RenderThreadFunc(void* gameGLContext) {
                 PROFILE_SCOPE_CAT("RT Build OBS Request", "Render Thread");
                 g_obsReadSlot.store(obsSlot, std::memory_order_release);
                 ObsFrameSubmission submission = g_obsSubmissionSlots[obsSlot];
-                g_obsReadSlot.store(-1, std::memory_order_release);
                 // Build the full request on the render thread (deferred from main thread)
                 request = BuildObsFrameRequest(submission.context, submission.isDualRenderingPath);
                 request.gameTextureFence = submission.gameTextureFence;
@@ -3233,10 +3326,17 @@ static void RenderThreadFunc(void* gameGLContext) {
 
         process_request:
 
+            auto releaseObsReadSlot = [&]() {
+                if (isObsRequest) { g_obsReadSlot.store(-1, std::memory_order_release); }
+            };
+
             auto startTime = std::chrono::high_resolution_clock::now();
 
             auto cfgSnapshot = GetConfigSnapshot();
-            if (!cfgSnapshot) continue;
+            if (!cfgSnapshot) {
+                releaseObsReadSlot();
+                continue;
+            }
             const Config& cfg = *cfgSnapshot;
             const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
 
@@ -3252,6 +3352,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 if (request.gameTextureFence && glIsSync(request.gameTextureFence)) { glDeleteSync(request.gameTextureFence); }
 
                 if (isObsRequest) {
+                    releaseObsReadSlot();
                     {
                         std::lock_guard<std::mutex> lock(g_obsCompletionMutex);
                         g_obsFrameComplete.store(true);
@@ -3420,12 +3521,34 @@ static void RenderThreadFunc(void* gameGLContext) {
                     }
                 }
 
+                GLuint readyTex = 0;
+                int srcW = 0;
+                int srcH = 0;
+
+                if (request.preferDirectGameTexture && request.gameTextureId != 0 && request.gameW > 0 && request.gameH > 0) {
+                    if (request.gameTextureFence && glIsSync(request.gameTextureFence)) {
+                        glWaitSync(request.gameTextureFence, 0, GL_TIMEOUT_IGNORED);
+                        glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+                    }
+
+                    if (RT_IsSampleableTexture2DCached(request.gameTextureId, request.gameW, request.gameH)) {
+                        readyTex = request.gameTextureId;
+                        srcW = request.gameW;
+                        srcH = request.gameH;
+                    } else {
+                        RT_LogInvalidTextureSampleThrottled("obs_direct_game_texture", request.gameTextureId, request.gameW,
+                                                            request.gameH);
+                    }
+                }
+
                 // Use the READY frame texture - guaranteed complete by mirror thread
                 // No fence wait needed - mirror thread already waited on the fence
                 // immediately after fence signals in Phase 1 of mirror thread loop
-                GLuint readyTex = GetReadyGameTexture();
-                int srcW = GetReadyGameWidth();
-                int srcH = GetReadyGameHeight();
+                if (readyTex == 0 || srcW <= 0 || srcH <= 0) {
+                    readyTex = GetReadyGameTexture();
+                    srcW = GetReadyGameWidth();
+                    srcH = GetReadyGameHeight();
+                }
 
                 // GetSafeReadTexture returns the texture NOT being written to (always valid, no fence needed)
                 if (readyTex == 0 || srcW <= 0 || srcH <= 0) {
@@ -3637,6 +3760,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
                 if (isObsRequest) {
                     AdvanceObsFBO();
+                    releaseObsReadSlot();
                     {
                         std::lock_guard<std::mutex> lock(g_obsCompletionMutex);
                         g_obsFrameComplete.store(true);
@@ -3798,6 +3922,8 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (g_renderThreadImGuiInitialized && shouldRenderAnyImGui) {
                 PROFILE_SCOPE_CAT("RT ImGui Render", "Render Thread");
+
+                std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
 
                 ImGui::SetCurrentContext(g_renderThreadImGuiContext);
 
@@ -4120,6 +4246,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (isObsRequest) {
                 AdvanceObsFBO();
+                releaseObsReadSlot();
                 {
                     std::lock_guard<std::mutex> lock(g_obsCompletionMutex);
                     g_obsFrameComplete.store(true);
@@ -4161,7 +4288,26 @@ static void RenderThreadFunc(void* gameGLContext) {
         if (renderVAO) glDeleteVertexArrays(1, &renderVAO);
         if (renderVBO) glDeleteBuffers(1, &renderVBO);
 
+        if (g_obsSubmissionReadFBO != 0) {
+            glDeleteFramebuffers(1, &g_obsSubmissionReadFBO);
+            g_obsSubmissionReadFBO = 0;
+            g_obsSubmissionReadAttachedTexture = 0;
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (g_obsSubmissionSourceFBOs[i] != 0) {
+                glDeleteFramebuffers(1, &g_obsSubmissionSourceFBOs[i]);
+                g_obsSubmissionSourceFBOs[i] = 0;
+            }
+            if (g_obsSubmissionSourceTextures[i] != 0) {
+                glDeleteTextures(1, &g_obsSubmissionSourceTextures[i]);
+                g_obsSubmissionSourceTextures[i] = 0;
+            }
+            g_obsSubmissionSourceWidths[i] = 0;
+            g_obsSubmissionSourceHeights[i] = 0;
+        }
+
         if (g_renderThreadImGuiInitialized) {
+            std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
             ImGui::SetCurrentContext(g_renderThreadImGuiContext);
             ImGui_ImplOpenGL3_Shutdown();
             ImGui_ImplWin32_Shutdown();
@@ -4192,8 +4338,8 @@ static void RenderThreadFunc(void* gameGLContext) {
     }
 }
 
-void StartRenderThread(void* gameGLContext) {
-    if (g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire)) {
+void StartRenderThread(void* gameGLContext, bool allowSameThreadMode) {
+    if (g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire) && !allowSameThreadMode) {
         if (g_renderThreadRunning.load(std::memory_order_acquire) || g_renderThread.joinable()) {
             StopRenderThread();
         }
@@ -4465,7 +4611,34 @@ void SubmitObsFrameContext(const ObsFrameSubmission& submission) {
         g_framesDropped.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    g_obsSubmissionSlots[writeSlot] = submission;
+
+    ObsFrameSubmission stagedSubmission = submission;
+    if (stagedSubmission.context.preferDirectGameTexture) {
+        PROFILE_SCOPE_CAT("OBS Snapshot Source Copy", "OBS");
+
+        int sourceW = 0;
+        int sourceH = 0;
+        if (!RT_IsSampleableTexture2D(stagedSubmission.context.gameTextureId, &sourceW, &sourceH)) {
+            RT_LogInvalidTextureSampleThrottled("obs_submission_source", stagedSubmission.context.gameTextureId,
+                                                stagedSubmission.context.gameW, stagedSubmission.context.gameH);
+            g_framesDropped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        stagedSubmission.context.gameW = sourceW;
+        stagedSubmission.context.gameH = sourceH;
+
+        if (!RT_CaptureObsSubmissionSourceTexture(writeSlot, stagedSubmission.context.gameTextureId, sourceW, sourceH)) {
+            g_framesDropped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        stagedSubmission.context.gameTextureId = g_obsSubmissionSourceTextures[writeSlot];
+        stagedSubmission.gameTextureFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+    }
+
+    g_obsSubmissionSlots[writeSlot] = stagedSubmission;
 
     g_obsWriteSlot.store(1 - writeSlot, std::memory_order_relaxed);
 
@@ -4541,6 +4714,7 @@ FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualR
     req.skipAnimation = false;
     req.isObsPass = true;
     req.relativeStretching = ctx.relativeStretching;
+    req.preferDirectGameTexture = ctx.preferDirectGameTexture;
     req.fromModeId = transitionState.fromModeId;
 
     if (!transitionState.fromModeId.empty()) {

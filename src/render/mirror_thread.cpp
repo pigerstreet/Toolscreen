@@ -2010,10 +2010,9 @@ static bool MT_HarvestContentReadback(MT_MirrorFbos& fb, bool& outHasContent) {
     if (mapped) {
         const int w = fb.contentPBOWidth;
         const int h = fb.contentPBOHeight;
-        const int step = 4;
-        for (int y = 0; y < h && !hasContent; y += step) {
+        for (int y = 0; y < h && !hasContent; ++y) {
             const unsigned char* row = mapped + (static_cast<size_t>(y) * w * 4);
-            for (int x = 0; x < w; x += step) {
+            for (int x = 0; x < w; ++x) {
                 if (row[(static_cast<size_t>(x) * 4) + 3] > 0) {
                     hasContent = true;
                     break;

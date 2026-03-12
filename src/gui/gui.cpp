@@ -38,6 +38,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <unordered_map>
 #include <winhttp.h>
 #include <windowsx.h>
@@ -169,6 +170,7 @@ void RenderSettingsGUI() {
     };
 
     static std::vector<DWORD> s_bindingKeys;
+    static std::unordered_set<DWORD> s_bindingKeySet;
     static bool s_hadKeysPressed = false;
     static std::set<DWORD> s_preHeldKeys;
     static bool s_bindingInitialized = false;
@@ -201,6 +203,8 @@ void RenderSettingsGUI() {
 
     if (is_binding) {
         if (!s_bindingInitialized) {
+            s_bindingKeys.reserve(8);
+            s_bindingKeySet.reserve(8);
             s_preHeldKeys.clear();
             for (int vk = 1; vk < 0xFF; ++vk) {
                 if (GetAsyncKeyState(vk) & 0x8000) {
@@ -212,6 +216,7 @@ void RenderSettingsGUI() {
         ImGui::OpenPopup(trc("hotkeys.bind_hotkey"));
     } else {
         s_bindingKeys.clear();
+        s_bindingKeySet.clear();
         s_hadKeysPressed = false;
         s_preHeldKeys.clear();
         s_bindingInitialized = false;
@@ -245,6 +250,7 @@ void RenderSettingsGUI() {
                 if (!conflict.empty()) {
                     s_hotkeyConflictMessage = "Already assigned to " + conflict;
                     s_bindingKeys.clear();
+                    s_bindingKeySet.clear();
                     s_hadKeysPressed = false;
                     return;
                 }
@@ -286,6 +292,7 @@ void RenderSettingsGUI() {
             }
 
             s_bindingKeys.clear();
+            s_bindingKeySet.clear();
             s_hadKeysPressed = false;
             s_preHeldKeys.clear();
             s_bindingInitialized = false;
@@ -303,6 +310,7 @@ void RenderSettingsGUI() {
                 s_exclusionToBind = { -1, -1 };
                 s_altHotkeyToBind = { -1, -1 };
                 s_bindingKeys.clear();
+                s_bindingKeySet.clear();
                 s_hadKeysPressed = false;
                 s_preHeldKeys.clear();
                 s_bindingInitialized = false;
@@ -340,6 +348,7 @@ void RenderSettingsGUI() {
                 s_exclusionToBind = { -1, -1 };
                 s_altHotkeyToBind = { -1, -1 };
                 s_bindingKeys.clear();
+                s_bindingKeySet.clear();
                 s_hadKeysPressed = false;
                 s_preHeldKeys.clear();
                 s_bindingInitialized = false;
@@ -360,6 +369,7 @@ void RenderSettingsGUI() {
         }
 
         std::vector<DWORD> currentlyPressed;
+        currentlyPressed.reserve(8);
 
         const bool lctrlDown = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
         const bool rctrlDown = (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
@@ -393,7 +403,7 @@ void RenderSettingsGUI() {
         }
 
         for (DWORD key : currentlyPressed) {
-            if (std::find(s_bindingKeys.begin(), s_bindingKeys.end(), key) == s_bindingKeys.end()) {
+            if (s_bindingKeySet.insert(key).second) {
                 bool isModifier = (key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || key == VK_LCONTROL || key == VK_RCONTROL ||
                                    key == VK_LSHIFT || key == VK_RSHIFT || key == VK_LMENU || key == VK_RMENU);
                 if (isModifier) {

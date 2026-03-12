@@ -36,6 +36,7 @@
 #include <sstream>
 #include <synchapi.h>
 #include <thread>
+#include <unordered_set>
 #include <windowsx.h>
 
 #pragma comment(lib, "Comdlg32.lib")
@@ -109,6 +110,9 @@ void ResizeHotkeySecondaryModes(size_t count) {
 
 TempSensitivityOverride g_tempSensitivityOverride;
 std::mutex g_tempSensitivityMutex;
+std::atomic<bool> g_tempSensitivityActiveAtomic{ false };
+std::atomic<float> g_tempSensitivityXAtomic{ 1.0f };
+std::atomic<float> g_tempSensitivityYAtomic{ 1.0f };
 
 void ClearTempSensitivityOverride() {
     std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
@@ -116,6 +120,9 @@ void ClearTempSensitivityOverride() {
     g_tempSensitivityOverride.sensitivityX = 1.0f;
     g_tempSensitivityOverride.sensitivityY = 1.0f;
     g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
+    g_tempSensitivityXAtomic.store(1.0f, std::memory_order_release);
+    g_tempSensitivityYAtomic.store(1.0f, std::memory_order_release);
+    g_tempSensitivityActiveAtomic.store(false, std::memory_order_release);
 }
 
 std::atomic<bool> g_cursorsNeedReload{ false };
@@ -528,6 +535,14 @@ std::atomic<void*> g_glViewportThirdPartyHookTarget{ nullptr };
 // Thread-local flag to track if glViewport is being called from our own code
 thread_local bool g_internalViewportCall = false;
 
+struct TextureBindingCacheEntry {
+    HGLRC context = nullptr;
+    GLuint texture2D = 0;
+    bool valid = false;
+};
+
+thread_local TextureBindingCacheEntry g_textureBindingCache;
+
 std::atomic<int> g_glViewportHookCount{ 0 };
 std::atomic<bool> g_glViewportHookedViaGLEW{ false };
 std::atomic<bool> g_glViewportHookedViaWGL{ false };
@@ -552,24 +567,25 @@ static __forceinline bool IsDynamicMemoryCaller(void* caller_address) {
     }
 
     struct CallerCacheEntry {
-        void* caller;
-        bool isDynamic;
+        void* caller = nullptr;
+        bool isDynamic = false;
     };
 
-    thread_local CallerCacheEntry callerCache[4] = {};
-    thread_local size_t nextCacheIndex = 0;
+    constexpr size_t kCallerCacheSize = 32;
+    constexpr size_t kCallerCacheMask = kCallerCacheSize - 1;
+    thread_local std::array<CallerCacheEntry, kCallerCacheSize> callerCache{};
 
-    for (const CallerCacheEntry& entry : callerCache) {
-        if (entry.caller == caller_address) {
-            return entry.isDynamic;
-        }
+    const size_t cacheIndex = (reinterpret_cast<uintptr_t>(caller_address) >> 4) & kCallerCacheMask;
+    CallerCacheEntry& entry = callerCache[cacheIndex];
+    if (entry.caller == caller_address) {
+        return entry.isDynamic;
     }
 
     PVOID baseOfImage = nullptr;
     const bool isDynamic = (RtlPcToFileHeader(caller_address, &baseOfImage) == NULL);
 
-    callerCache[nextCacheIndex] = { caller_address, isDynamic };
-    nextCacheIndex = (nextCacheIndex + 1) % std::size(callerCache);
+    entry.caller = caller_address;
+    entry.isDynamic = isDynamic;
     return isDynamic;
 }
 
@@ -582,11 +598,40 @@ void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     glBindTexture(target, texture);
 }
 
+static inline void UpdateTrackedTextureBinding(GLenum target, GLuint texture) {
+    if (target != GL_TEXTURE_2D) {
+        return;
+    }
+
+    const HGLRC currentContext = wglGetCurrentContext();
+    g_textureBindingCache.context = currentContext;
+    g_textureBindingCache.texture2D = texture;
+    g_textureBindingCache.valid = (currentContext != nullptr);
+}
+
+static inline GLuint GetTrackedTextureBindingForViewportHook() {
+    const HGLRC currentContext = wglGetCurrentContext();
+    if (currentContext != nullptr && g_textureBindingCache.valid && g_textureBindingCache.context == currentContext) {
+        return g_textureBindingCache.texture2D;
+    }
+
+    GLint currentTexture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
+
+    g_textureBindingCache.context = currentContext;
+    g_textureBindingCache.texture2D = static_cast<GLuint>(currentTexture);
+    g_textureBindingCache.valid = (currentContext != nullptr);
+    return static_cast<GLuint>(currentTexture);
+}
+
 static inline void BindTextureHook_Impl(GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
+    UpdateTrackedTextureBinding(target, texture);
+
     // only track valid 2D binds from the swapbuffers thread
     if (target == GL_TEXTURE_2D && texture != 0) {
+        static thread_local const DWORD s_currentThreadId = GetCurrentThreadId();
         const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
-        if (lastSwapThreadId != 0 && GetCurrentThreadId() == lastSwapThreadId) {
+        if (lastSwapThreadId != 0 && s_currentThreadId == lastSwapThreadId) {
             g_lastTrackedGameTextureBindId.store(texture, std::memory_order_release);
         }
     }
@@ -664,14 +709,22 @@ static HCURSOR SetCursorHook_Impl(SETCURSORPROC next, HCURSOR hCursor) {
 
     if (g_gameVersion >= GameVersion(1, 13, 0)) { return next(hCursor); }
 
-    std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
-
     if (g_showGui.load()) {
+        const std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
         const CursorTextures::CursorData* cursorData = CursorTextures::GetSelectedCursor(localGameState, 64);
         if (cursorData && cursorData->hCursor) { return next(cursorData->hCursor); }
     }
 
-    if (g_specialCursorHandle.load() != NULL) { return next(hCursor); }
+    if (hCursor == NULL || g_specialCursorHandle.load() != NULL) { return next(hCursor); }
+
+    static std::mutex s_scannedCursorHandlesMutex;
+    static std::unordered_set<HCURSOR> s_scannedCursorHandles;
+    {
+        std::lock_guard<std::mutex> lock(s_scannedCursorHandlesMutex);
+        if (!s_scannedCursorHandles.insert(hCursor).second) {
+            return next(hCursor);
+        }
+    }
 
     ICONINFO ii = { sizeof(ICONINFO) };
     if (GetIconInfo(hCursor, &ii)) {
@@ -721,16 +774,47 @@ static int lastViewportH = 0;
 
 static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStretchEnabled, int& outStretchX, int& outStretchY,
                                      int& outStretchW, int& outStretchH) {
-    auto cfgSnap = GetConfigSnapshot();
-    if (!cfgSnap) { return false; }
+    struct ViewportHookCache {
+        uint64_t configVersion = UINT64_MAX;
+        std::string modeId;
+        int screenW = 0;
+        int screenH = 0;
+        int modeW = 0;
+        int modeH = 0;
+        bool stretchEnabled = false;
+        int stretchX = 0;
+        int stretchY = 0;
+        int stretchW = 0;
+        int stretchH = 0;
+        bool valid = false;
+    };
 
+    thread_local ViewportHookCache s_cache;
+
+    const uint64_t configVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
     const int modeIdx = g_currentModeIdIndex.load(std::memory_order_acquire);
-    const std::string currentModeId = g_modeIdBuffers[modeIdx];
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
-    if (!mode) { return false; }
+    const std::string& currentModeId = g_modeIdBuffers[modeIdx];
 
     const int screenW = (std::max)(1, GetCachedWindowWidth());
     const int screenH = (std::max)(1, GetCachedWindowHeight());
+
+    if (s_cache.valid && s_cache.configVersion == configVersion && s_cache.screenW == screenW && s_cache.screenH == screenH &&
+        s_cache.modeId == currentModeId) {
+        outModeW = s_cache.modeW;
+        outModeH = s_cache.modeH;
+        outStretchEnabled = s_cache.stretchEnabled;
+        outStretchX = s_cache.stretchX;
+        outStretchY = s_cache.stretchY;
+        outStretchW = s_cache.stretchW;
+        outStretchH = s_cache.stretchH;
+        return true;
+    }
+
+    auto cfgSnap = GetConfigSnapshot();
+    if (!cfgSnap) { return false; }
+
+    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    if (!mode) { return false; }
 
     // Single source of truth: logic-thread-recalculated mode dimensions.
     // Do not re-run relative/expression math in the hook; that can introduce
@@ -740,21 +824,34 @@ static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStre
 
     if (modeW < 1 || modeH < 1) { return false; }
 
-    outModeW = modeW;
-    outModeH = modeH;
-
-    outStretchEnabled = mode->stretch.enabled;
+    s_cache.configVersion = configVersion;
+    s_cache.modeId = currentModeId;
+    s_cache.screenW = screenW;
+    s_cache.screenH = screenH;
+    s_cache.modeW = modeW;
+    s_cache.modeH = modeH;
+    s_cache.stretchEnabled = mode->stretch.enabled;
     if (mode->stretch.enabled) {
-        outStretchX = mode->stretch.x;
-        outStretchY = mode->stretch.y;
-        outStretchW = mode->stretch.width;
-        outStretchH = mode->stretch.height;
+        s_cache.stretchX = mode->stretch.x;
+        s_cache.stretchY = mode->stretch.y;
+        s_cache.stretchW = mode->stretch.width;
+        s_cache.stretchH = mode->stretch.height;
     } else {
-        outStretchX = screenW / 2 - modeW / 2;
-        outStretchY = screenH / 2 - modeH / 2;
-        outStretchW = modeW;
-        outStretchH = modeH;
+        s_cache.stretchX = screenW / 2 - modeW / 2;
+        s_cache.stretchY = screenH / 2 - modeH / 2;
+        s_cache.stretchW = modeW;
+        s_cache.stretchH = modeH;
     }
+
+    s_cache.valid = true;
+
+    outModeW = s_cache.modeW;
+    outModeH = s_cache.modeH;
+    outStretchEnabled = s_cache.stretchEnabled;
+    outStretchX = s_cache.stretchX;
+    outStretchY = s_cache.stretchY;
+    outStretchW = s_cache.stretchW;
+    outStretchH = s_cache.stretchH;
 
     return true;
 }
@@ -820,10 +917,9 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     }
 
     GLint readFBO = 0;
-    GLint currentTexture = 0;
 
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
+    const GLuint currentTexture = GetTrackedTextureBindingForViewportHook();
 
     if (currentTexture == 0 || readFBO != 0) {
         return next(x, y, width, height);
@@ -984,25 +1080,25 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
 
     CapturingState currentState = g_capturingMousePos.load();
 
-    // Convert viewport center (client-space) into absolute screen coordinates.
-    int centerX = viewport.stretchX + viewport.stretchWidth / 2;
-    int centerY = viewport.stretchY + viewport.stretchHeight / 2;
-    int centerX_abs = X;
-    int centerY_abs = Y;
-    HWND hwnd = g_minecraftHwnd.load();
-    RECT clientRectScreen{};
-    if (GetWindowClientRectInScreen(hwnd, clientRectScreen)) {
-        centerX_abs = clientRectScreen.left + centerX;
-        centerY_abs = clientRectScreen.top + centerY;
-    } else {
-        RECT monRect{};
-        if (GetMonitorRectForWindow(hwnd, monRect)) {
-            centerX_abs = monRect.left + centerX;
-            centerY_abs = monRect.top + centerY;
-        }
-    }
-
     if (currentState == CapturingState::DISABLED) {
+        // Convert viewport center (client-space) into absolute screen coordinates only when needed.
+        int centerX = viewport.stretchX + viewport.stretchWidth / 2;
+        int centerY = viewport.stretchY + viewport.stretchHeight / 2;
+        int centerX_abs = X;
+        int centerY_abs = Y;
+        HWND hwnd = g_minecraftHwnd.load();
+        RECT clientRectScreen{};
+        if (GetWindowClientRectInScreen(hwnd, clientRectScreen)) {
+            centerX_abs = clientRectScreen.left + centerX;
+            centerY_abs = clientRectScreen.top + centerY;
+        } else {
+            RECT monRect{};
+            if (GetMonitorRectForWindow(hwnd, monRect)) {
+                centerX_abs = monRect.left + centerX;
+                centerY_abs = monRect.top + centerY;
+            }
+        }
+
         g_nextMouseXY.store(std::make_pair(centerX_abs, centerY_abs));
         return next(X, Y);
     }
@@ -1062,6 +1158,54 @@ void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value) {
     GlfwSetInputModeHook_Impl(next, window, mode, value);
 }
 
+static std::pair<float, float> ResolveMouseSensitivityForRawInput() {
+    if (g_tempSensitivityActiveAtomic.load(std::memory_order_acquire)) {
+        return {
+            g_tempSensitivityXAtomic.load(std::memory_order_relaxed),
+            g_tempSensitivityYAtomic.load(std::memory_order_relaxed)
+        };
+    }
+
+    thread_local bool cachedTransitionActive = false;
+    thread_local std::string cachedModeId;
+    thread_local float cachedSensitivityX = 1.0f;
+    thread_local float cachedSensitivityY = 1.0f;
+
+    const ViewportTransitionSnapshot& transitionSnap =
+        g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
+    const bool transitionActive = transitionSnap.active;
+    const std::string& modeId = transitionActive
+        ? transitionSnap.toModeId
+        : g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+
+    if (modeId == cachedModeId && transitionActive == cachedTransitionActive) {
+        return { cachedSensitivityX, cachedSensitivityY };
+    }
+
+    float sensitivityX = 1.0f;
+    float sensitivityY = 1.0f;
+    auto inputCfgSnap = GetConfigSnapshot();
+    const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshot(*inputCfgSnap, modeId) : nullptr;
+    if (mode && mode->sensitivityOverrideEnabled) {
+        if (mode->separateXYSensitivity) {
+            sensitivityX = mode->modeSensitivityX;
+            sensitivityY = mode->modeSensitivityY;
+        } else {
+            sensitivityX = mode->modeSensitivity;
+            sensitivityY = mode->modeSensitivity;
+        }
+    } else if (inputCfgSnap) {
+        sensitivityX = inputCfgSnap->mouseSensitivity;
+        sensitivityY = inputCfgSnap->mouseSensitivity;
+    }
+
+    cachedTransitionActive = transitionActive;
+    cachedModeId = modeId;
+    cachedSensitivityX = sensitivityX;
+    cachedSensitivityY = sensitivityY;
+    return { sensitivityX, sensitivityY };
+}
+
 static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize,
                                     UINT cbSizeHeader) {
     if (!next) return static_cast<UINT>(-1);
@@ -1077,49 +1221,7 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
     RAWINPUT* raw = reinterpret_cast<RAWINPUT*>(pData);
 
     if (raw->header.dwType == RIM_TYPEMOUSE) {
-        // Get sensitivity setting using LOCK-FREE access to avoid input delay
-        float sensitivityX = 1.0f;
-        float sensitivityY = 1.0f;
-        bool sensitivityDetermined = false;
-
-        {
-            std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
-            if (g_tempSensitivityOverride.active) {
-                sensitivityX = g_tempSensitivityOverride.sensitivityX;
-                sensitivityY = g_tempSensitivityOverride.sensitivityY;
-                sensitivityDetermined = true;
-            }
-        }
-
-        if (!sensitivityDetermined) {
-            // Lock-free read: check transition snapshot first
-            const ViewportTransitionSnapshot& transitionSnap =
-                g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
-
-            std::string modeId;
-            if (transitionSnap.active) {
-                modeId = transitionSnap.toModeId; // Target mode during transition (lock-free from snapshot)
-            } else {
-                // Lock-free read of current mode ID from double-buffer
-                modeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-            }
-
-            // Check if the mode has a sensitivity override (use snapshot for thread safety)
-            auto inputCfgSnap = GetConfigSnapshot();
-            const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshot(*inputCfgSnap, modeId) : nullptr;
-            if (mode && mode->sensitivityOverrideEnabled) {
-                if (mode->separateXYSensitivity) {
-                    sensitivityX = mode->modeSensitivityX;
-                    sensitivityY = mode->modeSensitivityY;
-                } else {
-                    sensitivityX = mode->modeSensitivity;
-                    sensitivityY = mode->modeSensitivity;
-                }
-            } else if (inputCfgSnap) {
-                sensitivityX = inputCfgSnap->mouseSensitivity;
-                sensitivityY = inputCfgSnap->mouseSensitivity;
-            }
-        }
+        const auto [sensitivityX, sensitivityY] = ResolveMouseSensitivityForRawInput();
 
         if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
             static float xAccum = 0.0f;
@@ -1441,7 +1543,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
                     const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
                     const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
-                    const bool renderThreadNeeded = !sameThreadRenderPipeline;
+                    const bool sameThreadDedicatedObsTexture =
+                        sameThreadRenderPipeline && g_config.debug.sameThreadDedicatedObsTexture &&
+                        g_graphicsHookDetected.load(std::memory_order_acquire);
+                    const bool renderThreadNeeded = !sameThreadRenderPipeline || sameThreadDedicatedObsTexture;
                     const bool mirrorThreadNeeded = needCapture && !sameThreadRenderPipeline;
 
                     if (!renderThreadNeeded && g_renderThreadRunning.load(std::memory_order_acquire)) {
@@ -1452,7 +1557,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     }
 
                     if (renderThreadNeeded && !g_renderThreadRunning.load(std::memory_order_acquire)) {
-                        StartRenderThread(currentContext);
+                        StartRenderThread(currentContext, sameThreadDedicatedObsTexture);
                     }
                     if (mirrorThreadNeeded && !g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
                         StartMirrorCaptureThread(currentContext);
@@ -1852,19 +1957,22 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
 
         bool hideAnimOnScreen = frameCfg.hideAnimationsInGame && IsModeTransitionActive();
+        const bool sameThreadDedicatedObsTexture = frameCfg.debug.sameThreadRenderPipeline && frameCfg.debug.sameThreadDedicatedObsTexture &&
+                                                   g_graphicsHookDetected.load(std::memory_order_acquire);
 
         {
             PROFILE_SCOPE_CAT("Normal Mode Handling", "Rendering");
 
-            const bool useAsyncDualRendering = needsDualRendering && !frameCfg.debug.sameThreadRenderPipeline;
-            if (useAsyncDualRendering) {
+            const bool useRenderThreadDualRendering =
+                (!frameCfg.debug.sameThreadRenderPipeline && needsDualRendering) || sameThreadDedicatedObsTexture;
+            if (useRenderThreadDualRendering) {
                 // Submit animated frame to render thread for OBS capture using helper function
                 {
                     PROFILE_SCOPE_CAT("Submit OBS Frame", "OBS");
 
                     if (!g_renderThreadRunning.load(std::memory_order_acquire)) {
                         HGLRC gameContext = wglGetCurrentContext();
-                        if (gameContext) { StartRenderThread(gameContext); }
+                        if (gameContext) { StartRenderThread(gameContext, sameThreadDedicatedObsTexture); }
                     }
 
                     // Build lightweight context struct (no lock-free reads needed here - values already captured)
@@ -1879,7 +1987,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     submission.context.bgR = modeToRenderCopy.background.color.r;
                     submission.context.bgG = modeToRenderCopy.background.color.g;
                     submission.context.bgB = modeToRenderCopy.background.color.b;
-                    submission.context.shouldRenderGui = shouldRenderGui;
+                    submission.context.shouldRenderGui = sameThreadDedicatedObsTexture ? false : shouldRenderGui;
                     submission.context.showPerformanceOverlay = showPerformanceOverlay;
                     submission.context.showProfiler = showProfiler;
                     submission.context.isEyeZoom = isEyeZoom;
@@ -1893,13 +2001,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     submission.context.isRawWindowedMode = false;
                     submission.context.windowW = windowWidth;
                     submission.context.windowH = windowHeight;
+                    submission.context.preferDirectGameTexture = sameThreadDedicatedObsTexture;
                     submission.context.welcomeToastIsFullscreen = EqualsIgnoreCase(modeToRenderCopy.id, "Fullscreen");
                     submission.context.showWelcomeToast = false;
                     submission.isDualRenderingPath = hideAnimOnScreen;
-
-                    // Create fence and flush - these MUST be on GL thread
-                    submission.gameTextureFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-                    glFlush();
 
                     // Submit lightweight context - render thread will call BuildObsFrameRequest
                     SubmitObsFrameContext(submission);
@@ -1928,6 +2033,12 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 PROFILE_SCOPE_CAT("Fake Cursor Rendering", "Rendering");
                 if (IsCursorVisible()) { RenderFakeCursor(hwnd, windowWidth, windowHeight); }
             }
+        }
+
+        if (frameCfg.debug.sameThreadRenderPipeline && g_graphicsHookDetected.load(std::memory_order_acquire) &&
+            !frameCfg.debug.sameThreadDedicatedObsTexture) {
+            PROFILE_SCOPE_CAT("Capture Same-Thread OBS Frame", "OBS");
+            CaptureBackbufferForObs(fullW, fullH);
         }
 
         {
