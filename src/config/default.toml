@@ -505,8 +505,6 @@ windowOverlayIds = []
     selectedMode = 'gradient'
 [pieSpike]
 enabled = false
-orangeRatioTarget = 0.15
-tolerance = 0.03
 sampleRateMs = 200
 cooldownMs = 3000
 visualAlert = true
@@ -516,3 +514,21 @@ soundPath = ''
 orangeReference = [ 233, 109, 77 ]
 greenReference = [ 69, 204, 101 ]
 colorThreshold = 0.15
+
+[[pieSpike.targets]]
+name = 'Pure'
+ratio = 0.10
+tolerance = 0.03
+enabled = true
+
+[[pieSpike.targets]]
+name = 'Average'
+ratio = 0.15
+tolerance = 0.03
+enabled = true
+
+[[pieSpike.targets]]
+name = 'Big Orange'
+ratio = 0.55
+tolerance = 0.10
+enabled = true

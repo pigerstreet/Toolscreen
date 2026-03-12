@@ -14,19 +14,55 @@ if (ImGui::BeginTabItem("Pie Spike")) {
     if (!g_config.pieSpike.enabled) { ImGui::BeginDisabled(); }
 
     ImGui::Spacing();
+    ImGui::SeparatorText("Spike Targets");
+
+    for (int i = 0; i < (int)g_config.pieSpike.targets.size(); i++) {
+        auto& t = g_config.pieSpike.targets[i];
+        ImGui::PushID(i);
+
+        if (ImGui::Checkbox("##enabled", &t.enabled)) { g_configIsDirty = true; }
+        ImGui::SameLine();
+
+        char nameBuf[128];
+        strncpy(nameBuf, t.name.c_str(), sizeof(nameBuf) - 1);
+        nameBuf[sizeof(nameBuf) - 1] = '\0';
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::InputText("##name", nameBuf, sizeof(nameBuf))) {
+            t.name = nameBuf;
+            g_configIsDirty = true;
+        }
+        ImGui::SameLine();
+
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::SliderFloat("Ratio", &t.ratio, 0.0f, 1.0f, "%.3f")) { g_configIsDirty = true; }
+        ImGui::SameLine();
+
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::SliderFloat("Tol", &t.tolerance, 0.001f, 0.2f, "%.3f")) { g_configIsDirty = true; }
+        ImGui::SameLine();
+
+        if (ImGui::Button("X##remove")) {
+            g_config.pieSpike.targets.erase(g_config.pieSpike.targets.begin() + i);
+            g_configIsDirty = true;
+            ImGui::PopID();
+            i--;
+            continue;
+        }
+
+        ImGui::PopID();
+    }
+
+    if (ImGui::Button("+ Add Target")) {
+        PieSpikeTarget newTarget;
+        newTarget.name = "New Target";
+        g_config.pieSpike.targets.push_back(newTarget);
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker("Each target defines a ratio range. Alert triggers when any enabled target matches.\n\nPure: spawner only (~0.10)\nAverage: spawner + chest in front (~0.15)\nBig Orange: chest behind spawner (~0.55)");
+
+    ImGui::Spacing();
     ImGui::SeparatorText("Detection Settings");
-
-    if (ImGui::SliderFloat("Orange ratio target", &g_config.pieSpike.orangeRatioTarget, 0.0f, 1.0f, "%.3f")) {
-        g_configIsDirty = true;
-    }
-    ImGui::SameLine();
-    HelpMarker("Target ratio of orange (block entities) to total colored pixels. Typical spawner spike: 0.10-0.20.");
-
-    if (ImGui::SliderFloat("Tolerance", &g_config.pieSpike.tolerance, 0.001f, 0.2f, "%.3f")) {
-        g_configIsDirty = true;
-    }
-    ImGui::SameLine();
-    HelpMarker("How far the measured ratio can deviate from the target and still trigger.");
 
     if (ImGui::SliderFloat("Color match threshold", &g_config.pieSpike.colorThreshold, 0.01f, 0.5f, "%.3f")) {
         g_configIsDirty = true;
@@ -112,13 +148,7 @@ if (ImGui::BeginTabItem("Pie Spike")) {
 
     float currentRatio = g_pieSpikeLastOrangeRatio.load(std::memory_order_relaxed);
     ImGui::Text("Current orange ratio: %.4f", currentRatio);
-
-    // Visual bar showing ratio vs target
-    float target = g_config.pieSpike.orangeRatioTarget;
-    float tol = g_config.pieSpike.tolerance;
     ImGui::ProgressBar(currentRatio, ImVec2(-1, 0), "");
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetContentRegionAvail().x - ImGui::CalcItemWidth());
 
     bool alertActive = g_pieSpikeAlertActive.load(std::memory_order_relaxed);
     if (alertActive) {
@@ -127,7 +157,14 @@ if (ImGui::BeginTabItem("Pie Spike")) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No spike");
     }
 
-    ImGui::Text("Target range: %.3f - %.3f", target - tol, target + tol);
+    for (const auto& t : g_config.pieSpike.targets) {
+        if (!t.enabled) continue;
+        bool inRange = (currentRatio >= t.ratio - t.tolerance && currentRatio <= t.ratio + t.tolerance);
+        ImVec4 col = inRange ? ImVec4(1.0f, 0.5f, 0.2f, 1.0f) : ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+        ImGui::TextColored(col, "%s: %.3f - %.3f %s", t.name.c_str(),
+                           t.ratio - t.tolerance, t.ratio + t.tolerance,
+                           inRange ? "(MATCH)" : "");
+    }
 
     if (!g_config.pieSpike.enabled) { ImGui::EndDisabled(); }
 

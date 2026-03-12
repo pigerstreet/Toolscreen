@@ -433,10 +433,15 @@ struct KeyRebindsConfig {
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };
+struct PieSpikeTarget {
+    std::string name;
+    float ratio = 0.15f;
+    float tolerance = 0.03f;
+    bool enabled = true;
+};
 struct PieSpikeConfig {
     bool enabled = false;
-    float orangeRatioTarget = 0.15f;
-    float tolerance = 0.03f;
+    std::vector<PieSpikeTarget> targets;
     int sampleRateMs = 200;
     int cooldownMs = 3000;
     bool visualAlert = true;

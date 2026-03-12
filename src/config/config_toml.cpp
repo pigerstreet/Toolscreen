@@ -1545,8 +1545,18 @@ void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg) {
 
 void PieSpikeConfigToToml(const PieSpikeConfig& cfg, toml::table& out) {
     out.insert("enabled", cfg.enabled);
-    out.insert("orangeRatioTarget", cfg.orangeRatioTarget);
-    out.insert("tolerance", cfg.tolerance);
+
+    toml::array targetsArr;
+    for (const auto& t : cfg.targets) {
+        toml::table tgt;
+        tgt.insert("name", t.name);
+        tgt.insert("ratio", t.ratio);
+        tgt.insert("tolerance", t.tolerance);
+        tgt.insert("enabled", t.enabled);
+        targetsArr.push_back(tgt);
+    }
+    out.insert("targets", targetsArr);
+
     out.insert("sampleRateMs", static_cast<int64_t>(cfg.sampleRateMs));
     out.insert("cooldownMs", static_cast<int64_t>(cfg.cooldownMs));
     out.insert("visualAlert", cfg.visualAlert);
@@ -1560,8 +1570,32 @@ void PieSpikeConfigToToml(const PieSpikeConfig& cfg, toml::table& out) {
 
 void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg) {
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::PIE_SPIKE_ENABLED);
-    cfg.orangeRatioTarget = GetOr(tbl, "orangeRatioTarget", ConfigDefaults::PIE_SPIKE_ORANGE_RATIO_TARGET);
-    cfg.tolerance = GetOr(tbl, "tolerance", ConfigDefaults::PIE_SPIKE_TOLERANCE);
+
+    cfg.targets.clear();
+    if (auto arr = GetArray(tbl, "targets")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                PieSpikeTarget target;
+                target.name = GetStringOr(*t, "name", "");
+                target.ratio = GetOr(*t, "ratio", 0.15f);
+                target.tolerance = GetOr(*t, "tolerance", 0.03f);
+                target.enabled = GetOr(*t, "enabled", true);
+                cfg.targets.push_back(target);
+            }
+        }
+    }
+    // Legacy migration: old configs had a single orangeRatioTarget/tolerance
+    if (cfg.targets.empty()) {
+        float legacyRatio = GetOr(tbl, "orangeRatioTarget", -1.0f);
+        if (legacyRatio >= 0.0f) {
+            PieSpikeTarget t;
+            t.name = "Migrated";
+            t.ratio = legacyRatio;
+            t.tolerance = GetOr(tbl, "tolerance", 0.03f);
+            cfg.targets.push_back(t);
+        }
+    }
+
     cfg.sampleRateMs = GetOr(tbl, "sampleRateMs", ConfigDefaults::PIE_SPIKE_SAMPLE_RATE_MS);
     cfg.cooldownMs = GetOr(tbl, "cooldownMs", ConfigDefaults::PIE_SPIKE_COOLDOWN_MS);
     cfg.visualAlert = GetOr(tbl, "visualAlert", ConfigDefaults::PIE_SPIKE_VISUAL_ALERT);

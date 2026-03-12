@@ -3995,21 +3995,12 @@ static void RenderThreadFunc(void* gameGLContext) {
                         glPushMatrix();
                         glLoadIdentity();
 
-                        constexpr int kEdgeThickness = 8;
                         glColor4f(0.914f, 0.427f, 0.302f, alpha); // Orange (#E96D4D)
                         glBegin(GL_QUADS);
-                        // Top edge
-                        glVertex2i(0, request.fullH); glVertex2i(request.fullW, request.fullH);
-                        glVertex2i(request.fullW, request.fullH - kEdgeThickness); glVertex2i(0, request.fullH - kEdgeThickness);
-                        // Bottom edge
-                        glVertex2i(0, kEdgeThickness); glVertex2i(request.fullW, kEdgeThickness);
-                        glVertex2i(request.fullW, 0); glVertex2i(0, 0);
-                        // Left edge
-                        glVertex2i(0, request.fullH); glVertex2i(kEdgeThickness, request.fullH);
-                        glVertex2i(kEdgeThickness, 0); glVertex2i(0, 0);
-                        // Right edge
-                        glVertex2i(request.fullW - kEdgeThickness, request.fullH); glVertex2i(request.fullW, request.fullH);
-                        glVertex2i(request.fullW, 0); glVertex2i(request.fullW - kEdgeThickness, 0);
+                        glVertex2i(0, 0);
+                        glVertex2i(request.fullW, 0);
+                        glVertex2i(request.fullW, request.fullH);
+                        glVertex2i(0, request.fullH);
                         glEnd();
 
                         glMatrixMode(GL_PROJECTION);

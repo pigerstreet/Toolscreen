@@ -166,8 +166,6 @@ constexpr bool KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS = true;
 inline std::vector<DWORD> GetDefaultKeyRebindsToggleHotkey() { return {}; }
 
 constexpr bool PIE_SPIKE_ENABLED = false;
-constexpr float PIE_SPIKE_ORANGE_RATIO_TARGET = 0.15f;
-constexpr float PIE_SPIKE_TOLERANCE = 0.03f;
 constexpr int PIE_SPIKE_SAMPLE_RATE_MS = 200;
 constexpr int PIE_SPIKE_COOLDOWN_MS = 3000;
 constexpr bool PIE_SPIKE_VISUAL_ALERT = true;

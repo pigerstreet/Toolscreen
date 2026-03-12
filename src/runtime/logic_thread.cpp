@@ -674,10 +674,15 @@ static void CheckPieSpikeDetection() {
 
     if (!result.valid) return;
 
-    const float target = snap->pieSpike.orangeRatioTarget;
-    const float tolerance = snap->pieSpike.tolerance;
-
-    bool spikeDetected = (result.orangeRatio >= target - tolerance) && (result.orangeRatio <= target + tolerance);
+    bool spikeDetected = false;
+    for (const auto& t : snap->pieSpike.targets) {
+        if (!t.enabled) continue;
+        if (result.orangeRatio >= t.ratio - t.tolerance &&
+            result.orangeRatio <= t.ratio + t.tolerance) {
+            spikeDetected = true;
+            break;
+        }
+    }
     if (!spikeDetected) return;
 
     // Cooldown check
