@@ -1222,14 +1222,13 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
     const int captureSize = (std::min)((std::min)(cfg.captureSize, gameW), gameH);
     if (captureSize <= 0) return;
 
-    // Pie chart center: bottom-right of screen, offsets from utils.cpp
-    // PIE_X_LEFT=92, PIE_Y_TOP=220 - the pie chart center is approximately at these offsets
-    const int pieCenterX = gameW - 92;
-    const int pieCenterY_gl = 220 - captureSize / 2; // GL coords (bottom-up), pie center ~220px from bottom
+    // Pie chart center: offsets from right/bottom edges (configurable)
+    const int pieCenterX = gameW - cfg.captureOffsetX;
+    const int pieCenterY_gl = cfg.captureOffsetY; // GL coords (Y=0 is bottom)
 
     // Clamp capture region
     int capX = pieCenterX - captureSize / 2;
-    int capY = pieCenterY_gl;
+    int capY = pieCenterY_gl - captureSize / 2;
     if (capX < 0) capX = 0;
     if (capY < 0) capY = 0;
     if (capX + captureSize > gameW) capX = gameW - captureSize;

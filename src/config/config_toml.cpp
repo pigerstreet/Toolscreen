@@ -1562,6 +1562,8 @@ void PieSpikeConfigToToml(const PieSpikeConfig& cfg, toml::table& out) {
     out.insert("visualAlert", cfg.visualAlert);
     out.insert("soundAlert", cfg.soundAlert);
     out.insert("captureSize", static_cast<int64_t>(cfg.captureSize));
+    out.insert("captureOffsetX", static_cast<int64_t>(cfg.captureOffsetX));
+    out.insert("captureOffsetY", static_cast<int64_t>(cfg.captureOffsetY));
     out.insert("soundPath", cfg.soundPath);
     out.insert("orangeReference", ColorToTomlArray(cfg.orangeReference));
     out.insert("greenReference", ColorToTomlArray(cfg.greenReference));
@@ -1600,6 +1602,8 @@ void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg) {
     cfg.visualAlert = GetOr(tbl, "visualAlert", ConfigDefaults::PIE_SPIKE_VISUAL_ALERT);
     cfg.soundAlert = GetOr(tbl, "soundAlert", ConfigDefaults::PIE_SPIKE_SOUND_ALERT);
     cfg.captureSize = GetOr(tbl, "captureSize", ConfigDefaults::PIE_SPIKE_CAPTURE_SIZE);
+    cfg.captureOffsetX = GetOr(tbl, "captureOffsetX", 92);
+    cfg.captureOffsetY = GetOr(tbl, "captureOffsetY", 220);
     cfg.soundPath = GetStringOr(tbl, "soundPath", "");
     cfg.orangeReference = ColorFromTomlArray(GetArray(tbl, "orangeReference"), {233/255.f, 109/255.f, 77/255.f});
     cfg.greenReference = ColorFromTomlArray(GetArray(tbl, "greenReference"), {69/255.f, 204/255.f, 101/255.f});

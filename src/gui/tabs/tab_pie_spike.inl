@@ -120,6 +120,20 @@ if (ImGui::BeginTabItem("Pie Spike")) {
     ImGui::SameLine();
     HelpMarker("Size of the square region captured around the pie chart center.");
 
+    if (ImGui::InputInt("Offset X (from right)", &g_config.pieSpike.captureOffsetX, 1, 10)) {
+        if (g_config.pieSpike.captureOffsetX < 0) g_config.pieSpike.captureOffsetX = 0;
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker("Pixels from the right edge of the window to the pie chart center.");
+
+    if (ImGui::InputInt("Offset Y (from bottom)", &g_config.pieSpike.captureOffsetY, 1, 10)) {
+        if (g_config.pieSpike.captureOffsetY < 0) g_config.pieSpike.captureOffsetY = 0;
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker("Pixels from the bottom edge of the window to the pie chart center.");
+
     ImGui::Spacing();
     ImGui::SeparatorText("Alerts");
 

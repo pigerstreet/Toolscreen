@@ -447,6 +447,8 @@ struct PieSpikeConfig {
     bool visualAlert = true;
     bool soundAlert = true;
     int captureSize = 160;
+    int captureOffsetX = 92;  // Pixels from right edge to pie chart center
+    int captureOffsetY = 220; // Pixels from bottom edge to pie chart center
     std::string soundPath;
     Color orangeReference = {233/255.f, 109/255.f, 77/255.f};
     Color greenReference = {69/255.f, 204/255.f, 101/255.f};
