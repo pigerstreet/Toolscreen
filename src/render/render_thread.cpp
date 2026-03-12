@@ -3966,6 +3966,34 @@ static void RenderThreadFunc(void* gameGLContext) {
 
                 RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
 
+                // Pie spike indicator — bottom-right label showing matched spike type
+                if (request.showPieSpikeAlert && request.pieSpikeMatchedName[0] != '\0') {
+                    ImFont* font = ImGui::GetFont();
+                    if (font) {
+                        ImDrawList* drawList = ImGui::GetForegroundDrawList();
+                        const char* label = request.pieSpikeMatchedName;
+                        constexpr float kFontSize = 16.0f;
+                        constexpr float kPadX = 6.0f;
+                        constexpr float kPadY = 4.0f;
+                        constexpr float kMargin = 10.0f;
+
+                        ImVec2 textSize = font->CalcTextSizeA(kFontSize, FLT_MAX, 0.0f, label);
+                        float boxW = textSize.x + kPadX * 2;
+                        float boxH = textSize.y + kPadY * 2;
+                        float boxX = request.fullW - kMargin - boxW;
+                        float boxY = request.fullH - kMargin - boxH;
+
+                        // Background box
+                        drawList->AddRectFilled(
+                            ImVec2(boxX, boxY), ImVec2(boxX + boxW, boxY + boxH),
+                            IM_COL32(233, 109, 77, 220), 4.0f);
+                        // Text
+                        drawList->AddText(font, kFontSize,
+                            ImVec2(boxX + kPadX, boxY + kPadY),
+                            IM_COL32(255, 255, 255, 255), label);
+                    }
+                }
+
                 // Publish capture flags for the window thread (ESC handling, overlay keyboard forwarding, etc.)
                 ImGuiInputQueue_PublishCaptureState();
 
@@ -3974,34 +4002,6 @@ static void RenderThreadFunc(void* gameGLContext) {
             }
 
             if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
-
-            // Pie spike indicator — bottom-right label showing matched spike type
-            if (request.showPieSpikeAlert && request.pieSpikeMatchedName[0] != '\0') {
-                ImFont* font = ImGui::GetFont();
-                if (font) {
-                    ImDrawList* drawList = ImGui::GetForegroundDrawList();
-                    const char* label = request.pieSpikeMatchedName;
-                    constexpr float kFontSize = 16.0f;
-                    constexpr float kPadX = 6.0f;
-                    constexpr float kPadY = 4.0f;
-                    constexpr float kMargin = 10.0f;
-
-                    ImVec2 textSize = font->CalcTextSizeA(kFontSize, FLT_MAX, 0.0f, label);
-                    float boxW = textSize.x + kPadX * 2;
-                    float boxH = textSize.y + kPadY * 2;
-                    float boxX = request.fullW - kMargin - boxW;
-                    float boxY = request.fullH - kMargin - boxH;
-
-                    // Background box
-                    drawList->AddRectFilled(
-                        ImVec2(boxX, boxY), ImVec2(boxX + boxW, boxY + boxH),
-                        IM_COL32(233, 109, 77, 220), 4.0f);
-                    // Text
-                    drawList->AddText(font, kFontSize,
-                        ImVec2(boxX + kPadX, boxY + kPadY),
-                        IM_COL32(255, 255, 255, 255), label);
-                }
-            }
 
             // Create fence to signal when GPU completes all rendering commands
             GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
