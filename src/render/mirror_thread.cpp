@@ -1254,6 +1254,10 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
             const unsigned char* mapped = static_cast<const unsigned char*>(
                 glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
                     static_cast<GLsizeiptr>(res.texW) * res.texH * 4, GL_MAP_READ_BIT));
+
+            int writeIdx = 1 - g_pieSpikeResultIndex.load(std::memory_order_acquire);
+            PieSpikeAnalysisResult& result = g_pieSpikeResults[writeIdx];
+
             if (mapped) {
                 int orangeCount = 0, greenCount = 0;
                 const float oR = cfg.orangeReference.r, oG = cfg.orangeReference.g, oB = cfg.orangeReference.b;
@@ -1271,9 +1275,7 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
                         const float g = row[idx + 1] / 255.0f;
                         const float b = row[idx + 2] / 255.0f;
 
-                        // Euclidean distance to orange reference
                         float dOrange = (r - oR) * (r - oR) + (g - oG) * (g - oG) + (b - oB) * (b - oB);
-                        // Euclidean distance to green reference
                         float dGreen = (r - gR) * (r - gR) + (g - gG) * (g - gG) + (b - gB) * (b - gB);
 
                         if (dOrange < threshold * threshold) { orangeCount++; }
@@ -1283,18 +1285,29 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
 
                 glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
 
-                // Write to inactive buffer and swap
-                int writeIdx = 1 - g_pieSpikeResultIndex.load(std::memory_order_acquire);
-                PieSpikeAnalysisResult& result = g_pieSpikeResults[writeIdx];
                 result.orangePixels = orangeCount;
                 result.greenPixels = greenCount;
                 result.totalSampled = (w / step) * (h / step);
                 int total = orangeCount + greenCount;
-                constexpr int kMinColoredPixels = 500; // Pie chart produces thousands; random game pixels rarely hit this
+                constexpr int kMinColoredPixels = 500;
                 result.orangeRatio = (total > kMinColoredPixels) ? static_cast<float>(orangeCount) / static_cast<float>(total) : 0.0f;
                 result.valid = (total > kMinColoredPixels);
-                g_pieSpikeResultIndex.store(writeIdx, std::memory_order_release);
+            } else {
+                // glMapBufferRange failed — publish invalid result to clear stale data
+                result.orangePixels = 0;
+                result.greenPixels = 0;
+                result.totalSampled = 0;
+                result.orangeRatio = 0.0f;
+                result.valid = false;
             }
+            g_pieSpikeResultIndex.store(writeIdx, std::memory_order_release);
+
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            if (glIsSync(res.fence)) { glDeleteSync(res.fence); }
+            res.fence = nullptr;
+            res.readbackPending = false;
+        } else if (fenceStatus == GL_WAIT_FAILED) {
+            // GPU fence failed — clean up to avoid permanent stall
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
             if (glIsSync(res.fence)) { glDeleteSync(res.fence); }
             res.fence = nullptr;

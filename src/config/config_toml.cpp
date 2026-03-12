@@ -1586,10 +1586,8 @@ void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg) {
             }
         }
     }
-    // Migration: ensure all 6 default targets exist
-    // Old configs may have fewer targets (e.g. 3 from earlier versions)
-    if (cfg.targets.size() < 6) {
-        cfg.targets.clear();
+    // Legacy migration: populate default targets when config has none
+    if (cfg.targets.empty()) {
         cfg.targets.push_back({"Pure (hitboxes off)", 0.496f, 0.05f, true});
         cfg.targets.push_back({"Pure (hitboxes on)", 0.630f, 0.05f, true});
         cfg.targets.push_back({"Chest in front (hitboxes off)", 0.655f, 0.05f, true});
