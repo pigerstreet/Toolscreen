@@ -517,36 +517,36 @@ colorThreshold = 0.15
 
 [[pieSpike.targets]]
 name = 'Pure (hitboxes off)'
-ratio = 0.33
+ratio = 0.496
 tolerance = 0.05
 enabled = true
 
 [[pieSpike.targets]]
 name = 'Pure (hitboxes on)'
-ratio = 0.74
+ratio = 0.630
 tolerance = 0.05
 enabled = true
 
 [[pieSpike.targets]]
 name = 'Chest in front (hitboxes off)'
-ratio = 0.73
+ratio = 0.655
 tolerance = 0.05
 enabled = true
 
 [[pieSpike.targets]]
 name = 'Chest in front (hitboxes on)'
-ratio = 0.81
+ratio = 0.821
 tolerance = 0.05
 enabled = true
 
 [[pieSpike.targets]]
 name = 'Chest behind (hitboxes off)'
-ratio = 0.91
+ratio = 0.857
 tolerance = 0.05
 enabled = true
 
 [[pieSpike.targets]]
 name = 'Chest behind (hitboxes on)'
-ratio = 0.92
+ratio = 0.929
 tolerance = 0.05
 enabled = true
