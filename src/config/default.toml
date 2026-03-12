@@ -505,7 +505,7 @@ windowOverlayIds = []
     selectedMode = 'gradient'
 [pieSpike]
 enabled = false
-sampleRateMs = 200
+sampleRateMs = 50
 cooldownMs = 3000
 visualAlert = true
 soundAlert = true
