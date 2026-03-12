@@ -34,30 +34,14 @@ jobs:
         shell: cmd
         run: build.bat release --test
 
-      - name: Rename release artifacts
+      - name: Rename DLL and PDB with version
         shell: pwsh
         run: |
           $outputDir = 'out/build/bin/Release'
           $version = '${{ steps.version.outputs.version }}'
-          $suffix = "-$version"
 
-          $filesToRename = @(
-            Join-Path $outputDir 'Toolscreen.dll'
-            Join-Path $outputDir 'Toolscreen.pdb'
-          )
-
-          $filesToRename += Get-ChildItem $outputDir -File -Filter '*.jar' | Select-Object -ExpandProperty FullName
-          $filesToRename += Get-ChildItem $outputDir -File -Filter '*.exe' | Select-Object -ExpandProperty FullName
-
-          foreach ($filePath in $filesToRename) {
-            if (-not (Test-Path $filePath)) {
-              throw "Expected artifact not found: $filePath"
-            }
-
-            $item = Get-Item $filePath
-            $renamed = '{0}{1}{2}' -f $item.BaseName, $suffix, $item.Extension
-            Move-Item -Path $item.FullName -Destination (Join-Path $item.DirectoryName $renamed)
-          }
+          Move-Item (Join-Path $outputDir 'Toolscreen.dll') (Join-Path $outputDir "Toolscreen-$version.dll")
+          Move-Item (Join-Path $outputDir 'Toolscreen.pdb') (Join-Path $outputDir "Toolscreen-$version.pdb")
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -68,5 +52,5 @@ jobs:
           path: |
             out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}.dll
             out/build/bin/Release/Toolscreen-${{ steps.version.outputs.version }}.pdb
-            out/build/bin/Release/*-${{ steps.version.outputs.version }}.jar
-            out/build/bin/Release/*-${{ steps.version.outputs.version }}.exe
+            out/build/bin/Release/*.jar
+            out/build/bin/Release/*.exe
