@@ -713,6 +713,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay);
 extern std::atomic<bool> g_pieSpikeAlertActive;
 extern std::atomic<float> g_pieSpikeLastOrangeRatio;
 extern std::atomic<int64_t> g_pieSpikeLastAlertTimeMs;
+extern char g_pieSpikeMatchedName[64]; // Written by logic thread, read by render thread (guarded by g_pieSpikeAlertActive)
 
 extern std::atomic<bool> g_welcomeToastVisible;
 extern std::atomic<bool> g_configurePromptDismissedThisSession;

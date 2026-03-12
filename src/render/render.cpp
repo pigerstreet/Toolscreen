@@ -2852,6 +2852,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
             request.showPieSpikeAlert = g_pieSpikeAlertActive.load(std::memory_order_acquire);
             request.pieSpikeAlertTimeMs = g_pieSpikeLastAlertTimeMs.load(std::memory_order_relaxed);
+            if (request.showPieSpikeAlert) {
+                memcpy(request.pieSpikeMatchedName, g_pieSpikeMatchedName, sizeof(request.pieSpikeMatchedName));
+            }
 
             request.backgroundIsImage = (modeToRender->background.selectedMode == "image");
             request.bgR = modeToRender->background.color.r;

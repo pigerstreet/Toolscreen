@@ -3975,39 +3975,32 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
 
-            // Pie spike indicator — bottom-right corner dot, visible while spike detected
-            if (request.showPieSpikeAlert) {
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glUseProgram(0);
-                glMatrixMode(GL_PROJECTION);
-                glPushMatrix();
-                glLoadIdentity();
-                glOrtho(0, request.fullW, 0, request.fullH, -1, 1);
-                glMatrixMode(GL_MODELVIEW);
-                glPushMatrix();
-                glLoadIdentity();
+            // Pie spike indicator — bottom-right label showing matched spike type
+            if (request.showPieSpikeAlert && request.pieSpikeMatchedName[0] != '\0') {
+                ImFont* font = ImGui::GetFont();
+                if (font) {
+                    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+                    const char* label = request.pieSpikeMatchedName;
+                    constexpr float kFontSize = 16.0f;
+                    constexpr float kPadX = 6.0f;
+                    constexpr float kPadY = 4.0f;
+                    constexpr float kMargin = 10.0f;
 
-                constexpr int kSize = 16;
-                constexpr int kMargin = 12;
-                int x1 = request.fullW - kMargin - kSize;
-                int y1 = kMargin; // bottom-right in OpenGL coords (Y=0 is bottom)
-                int x2 = x1 + kSize;
-                int y2 = y1 + kSize;
+                    ImVec2 textSize = font->CalcTextSizeA(kFontSize, FLT_MAX, 0.0f, label);
+                    float boxW = textSize.x + kPadX * 2;
+                    float boxH = textSize.y + kPadY * 2;
+                    float boxX = request.fullW - kMargin - boxW;
+                    float boxY = request.fullH - kMargin - boxH;
 
-                glColor4f(0.914f, 0.427f, 0.302f, 0.9f); // Orange (#E96D4D)
-                glBegin(GL_QUADS);
-                glVertex2i(x1, y1);
-                glVertex2i(x2, y1);
-                glVertex2i(x2, y2);
-                glVertex2i(x1, y2);
-                glEnd();
-
-                glMatrixMode(GL_PROJECTION);
-                glPopMatrix();
-                glMatrixMode(GL_MODELVIEW);
-                glPopMatrix();
-                glDisable(GL_BLEND);
+                    // Background box
+                    drawList->AddRectFilled(
+                        ImVec2(boxX, boxY), ImVec2(boxX + boxW, boxY + boxH),
+                        IM_COL32(233, 109, 77, 220), 4.0f);
+                    // Text
+                    drawList->AddText(font, kFontSize,
+                        ImVec2(boxX + kPadX, boxY + kPadY),
+                        IM_COL32(255, 255, 255, 255), label);
+                }
             }
 
             // Create fence to signal when GPU completes all rendering commands

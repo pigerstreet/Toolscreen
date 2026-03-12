@@ -678,18 +678,23 @@ static void CheckPieSpikeDetection() {
     }
 
     bool spikeDetected = false;
+    std::string matchedName;
     for (const auto& t : snap->pieSpike.targets) {
         if (!t.enabled) continue;
         if (result.orangeRatio >= t.ratio - t.tolerance &&
             result.orangeRatio <= t.ratio + t.tolerance) {
             spikeDetected = true;
+            matchedName = t.name;
             break;
         }
     }
 
     // Visual: constant indicator — on while spike detected, off when not
-    if (snap->pieSpike.visualAlert) {
-        g_pieSpikeAlertActive.store(spikeDetected, std::memory_order_release);
+    if (snap->pieSpike.visualAlert && spikeDetected) {
+        // Write name before setting flag (flag acts as release for name)
+        strncpy(g_pieSpikeMatchedName, matchedName.c_str(), sizeof(g_pieSpikeMatchedName) - 1);
+        g_pieSpikeMatchedName[sizeof(g_pieSpikeMatchedName) - 1] = '\0';
+        g_pieSpikeAlertActive.store(true, std::memory_order_release);
     } else {
         g_pieSpikeAlertActive.store(false, std::memory_order_release);
     }

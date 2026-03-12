@@ -122,6 +122,7 @@ std::atomic<bool> g_configurePromptDismissedThisSession{ false };
 std::atomic<bool> g_pieSpikeAlertActive{ false };
 std::atomic<float> g_pieSpikeLastOrangeRatio{ 0.0f };
 std::atomic<int64_t> g_pieSpikeLastAlertTimeMs{ 0 };
+char g_pieSpikeMatchedName[64] = {};
 
 void RenderWelcomeToast(bool isFullscreen) {
     if (isFullscreen && g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) { return; }

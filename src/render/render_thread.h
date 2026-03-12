@@ -125,6 +125,7 @@ struct FrameRenderRequest {
 
     bool showPieSpikeAlert = false;
     int64_t pieSpikeAlertTimeMs = 0;
+    char pieSpikeMatchedName[64] = {};
 
     bool isWindowed = false;
     int windowW = 0;
