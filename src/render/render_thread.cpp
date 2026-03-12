@@ -4001,8 +4001,8 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
 
-            // Pie spike indicator — raw OpenGL so it renders even without ImGui init
-            if (request.showPieSpikeAlert) {
+            // Pie spike indicator — raw OpenGL fallback only when ImGui hasn't initialized yet
+            if (request.showPieSpikeAlert && !g_renderThreadImGuiInitialized) {
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                 glUseProgram(0);
