@@ -503,3 +503,16 @@ windowOverlayIds = []
     gradientStops = [ { color = [ 84, 11, 128 ], position = 0.0 }, { color = [ 21, 0, 72 ], position = 1.0 } ]
     image = ''
     selectedMode = 'gradient'
+[pieSpike]
+enabled = false
+orangeRatioTarget = 0.15
+tolerance = 0.03
+sampleRateMs = 200
+cooldownMs = 3000
+visualAlert = true
+soundAlert = true
+captureSize = 160
+soundPath = ''
+orangeReference = [ 233, 109, 77 ]
+greenReference = [ 69, 204, 101 ]
+colorThreshold = 0.15

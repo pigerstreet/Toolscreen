@@ -24,6 +24,10 @@ std::atomic<int> g_activeMirrorCaptureCount{ 0 };
 // Summary for capture throttling: see mirror_thread.h
 std::atomic<int> g_activeMirrorCaptureMaxFps{ 0 };
 
+// Pie spike detection double-buffered results
+PieSpikeAnalysisResult g_pieSpikeResults[2];
+std::atomic<int> g_pieSpikeResultIndex{ 0 };
+
 static HGLRC g_mirrorCaptureContext = NULL;
 static HDC g_mirrorCaptureDC = NULL;
 static bool g_mirrorContextIsShared = false;
@@ -1195,6 +1199,154 @@ struct MT_MirrorFbos {
     int contentDownH = 0;
 };
 
+// GPU resources for pie spike chart analysis (lazy-allocated)
+struct MT_PieSpikeGpuResources {
+    GLuint fbo = 0;
+    GLuint tex = 0;
+    GLuint pbo = 0;
+    GLsync fence = nullptr;
+    bool readbackPending = false;
+    int texSize = 0;
+    std::chrono::steady_clock::time_point lastSampleTime{};
+};
+
+static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex, int gameW, int gameH,
+                                     const PieSpikeConfig& cfg) {
+    if (!cfg.enabled || srcTex == 0 || gameW <= 0 || gameH <= 0) return;
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - res.lastSampleTime).count();
+    if (elapsed < cfg.sampleRateMs) return;
+    res.lastSampleTime = now;
+
+    const int captureSize = (std::min)((std::min)(cfg.captureSize, gameW), gameH);
+    if (captureSize <= 0) return;
+
+    // Pie chart center: bottom-right of screen, offsets from utils.cpp
+    // PIE_X_LEFT=92, PIE_Y_TOP=220 - the pie chart center is approximately at these offsets
+    const int pieCenterX = gameW - 92;
+    const int pieCenterY_gl = 220 - captureSize / 2; // GL coords (bottom-up), pie center ~220px from bottom
+
+    // Clamp capture region
+    int capX = pieCenterX - captureSize / 2;
+    int capY = pieCenterY_gl;
+    if (capX < 0) capX = 0;
+    if (capY < 0) capY = 0;
+    if (capX + captureSize > gameW) capX = gameW - captureSize;
+    if (capY + captureSize > gameH) capY = gameH - captureSize;
+
+    // === Harvest previous frame's result (non-blocking) ===
+    if (res.readbackPending && res.fence) {
+        GLenum fenceStatus = glClientWaitSync(res.fence, 0, 0);
+        if (fenceStatus == GL_ALREADY_SIGNALED || fenceStatus == GL_CONDITION_SATISFIED) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
+            const unsigned char* mapped = static_cast<const unsigned char*>(
+                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                    res.texSize * res.texSize * 4, GL_MAP_READ_BIT));
+            if (mapped) {
+                int orangeCount = 0, greenCount = 0;
+                const float oR = cfg.orangeReference.r, oG = cfg.orangeReference.g, oB = cfg.orangeReference.b;
+                const float gR = cfg.greenReference.r, gG = cfg.greenReference.g, gB = cfg.greenReference.b;
+                const float threshold = cfg.colorThreshold;
+                const int sz = res.texSize;
+                const int step = 2; // Sample every other pixel for speed
+
+                for (int y = 0; y < sz; y += step) {
+                    const unsigned char* row = mapped + (static_cast<size_t>(y) * sz * 4);
+                    for (int x = 0; x < sz; x += step) {
+                        const int idx = x * 4;
+                        const float r = row[idx] / 255.0f;
+                        const float g = row[idx + 1] / 255.0f;
+                        const float b = row[idx + 2] / 255.0f;
+
+                        // Euclidean distance to orange reference
+                        float dOrange = (r - oR) * (r - oR) + (g - oG) * (g - oG) + (b - oB) * (b - oB);
+                        // Euclidean distance to green reference
+                        float dGreen = (r - gR) * (r - gR) + (g - gG) * (g - gG) + (b - gB) * (b - gB);
+
+                        if (dOrange < threshold * threshold) { orangeCount++; }
+                        else if (dGreen < threshold * threshold) { greenCount++; }
+                    }
+                }
+
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+
+                // Write to inactive buffer and swap
+                int writeIdx = 1 - g_pieSpikeResultIndex.load(std::memory_order_acquire);
+                PieSpikeAnalysisResult& result = g_pieSpikeResults[writeIdx];
+                result.orangePixels = orangeCount;
+                result.greenPixels = greenCount;
+                result.totalSampled = (sz / step) * (sz / step);
+                int total = orangeCount + greenCount;
+                result.orangeRatio = (total > 10) ? static_cast<float>(orangeCount) / static_cast<float>(total) : 0.0f;
+                result.valid = (total > 10);
+                g_pieSpikeResultIndex.store(writeIdx, std::memory_order_release);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            if (glIsSync(res.fence)) { glDeleteSync(res.fence); }
+            res.fence = nullptr;
+            res.readbackPending = false;
+        }
+    }
+
+    // === Submit new readback ===
+    // Lazy-allocate GPU resources
+    const bool sizeChanged = (res.texSize != captureSize);
+
+    if (res.fbo == 0 || res.tex == 0 || sizeChanged) {
+        if (res.fbo == 0) { glGenFramebuffers(1, &res.fbo); }
+        if (res.tex == 0) { glGenTextures(1, &res.tex); }
+
+        BindTextureDirect(GL_TEXTURE_2D, res.tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, captureSize, captureSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        BindTextureDirect(GL_TEXTURE_2D, 0);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, res.fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, res.tex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    if (res.pbo == 0 || sizeChanged) {
+        if (res.pbo == 0) { glGenBuffers(1, &res.pbo); }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
+        glBufferData(GL_PIXEL_PACK_BUFFER, captureSize * captureSize * 4, nullptr, GL_STREAM_READ);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+
+    res.texSize = captureSize;
+
+    // Clean up old fence
+    if (res.fence) {
+        if (glIsSync(res.fence)) { glDeleteSync(res.fence); }
+        res.fence = nullptr;
+    }
+
+    // Blit source texture region into our capture FBO
+    // Need a temporary FBO to read from the source texture
+    GLuint srcFbo = 0;
+    glGenFramebuffers(1, &srcFbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, res.fbo);
+    glBlitFramebuffer(capX, capY, capX + captureSize, capY + captureSize,
+                      0, 0, captureSize, captureSize,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glDeleteFramebuffers(1, &srcFbo);
+
+    // Async PBO readback
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, res.fbo);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
+    glReadPixels(0, 0, captureSize, captureSize, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+    res.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    res.readbackPending = true;
+}
+
 static void MirrorCaptureThreadFunc(void* unused) {
     _set_se_translator(SEHTranslator);
 
@@ -1255,6 +1407,8 @@ static void MirrorCaptureThreadFunc(void* unused) {
 
 
         std::unordered_map<std::string, MT_MirrorFbos> mt_fbos;
+
+        MT_PieSpikeGpuResources pieSpikeRes;
 
         uint64_t cachedConfigVersion = 0;
         std::vector<ThreadedMirrorConfig> configsCache;
@@ -1698,6 +1852,14 @@ static void MirrorCaptureThreadFunc(void* unused) {
             // Note: OBS capture is done synchronously in CaptureToObsFBO (dllmain.cpp)
             // which includes animations and overlays applied by the game thread
 
+            // Pie spike chart analysis (uses game copy texture directly)
+            {
+                auto snap = GetConfigSnapshot();
+                if (snap && snap->pieSpike.enabled && validTexture != 0) {
+                    MT_AnalyzePieSpikeChart(pieSpikeRes, validTexture, validW, validH, snap->pieSpike);
+                }
+            }
+
             // Submit all queued GPU work and make fences visible to other contexts.
             if (!readyToPublish.empty()) {
                 glFlush();
@@ -1715,6 +1877,12 @@ static void MirrorCaptureThreadFunc(void* unused) {
         MT_CleanupShaders();
 
         if (debugSampleFbo) { glDeleteFramebuffers(1, &debugSampleFbo); }
+
+        // Cleanup pie spike GPU resources
+        if (pieSpikeRes.fbo) { glDeleteFramebuffers(1, &pieSpikeRes.fbo); }
+        if (pieSpikeRes.tex) { glDeleteTextures(1, &pieSpikeRes.tex); }
+        if (pieSpikeRes.pbo) { glDeleteBuffers(1, &pieSpikeRes.pbo); }
+        if (pieSpikeRes.fence && glIsSync(pieSpikeRes.fence)) { glDeleteSync(pieSpikeRes.fence); }
 
         // Cleanup mirror-thread local FBOs and PBOs
         for (auto& kv : mt_fbos) {

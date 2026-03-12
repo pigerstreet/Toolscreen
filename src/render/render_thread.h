@@ -123,6 +123,9 @@ struct FrameRenderRequest {
     bool showWelcomeToast = false;
     bool welcomeToastIsFullscreen = false;
 
+    bool showPieSpikeAlert = false;
+    int64_t pieSpikeAlertTimeMs = 0;
+
     bool isWindowed = false;
     int windowW = 0;
     int windowH = 0;

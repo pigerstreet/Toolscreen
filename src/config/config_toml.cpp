@@ -1543,6 +1543,36 @@ void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg) {
     }
 }
 
+void PieSpikeConfigToToml(const PieSpikeConfig& cfg, toml::table& out) {
+    out.insert("enabled", cfg.enabled);
+    out.insert("orangeRatioTarget", cfg.orangeRatioTarget);
+    out.insert("tolerance", cfg.tolerance);
+    out.insert("sampleRateMs", static_cast<int64_t>(cfg.sampleRateMs));
+    out.insert("cooldownMs", static_cast<int64_t>(cfg.cooldownMs));
+    out.insert("visualAlert", cfg.visualAlert);
+    out.insert("soundAlert", cfg.soundAlert);
+    out.insert("captureSize", static_cast<int64_t>(cfg.captureSize));
+    out.insert("soundPath", cfg.soundPath);
+    out.insert("orangeReference", ColorToTomlArray(cfg.orangeReference));
+    out.insert("greenReference", ColorToTomlArray(cfg.greenReference));
+    out.insert("colorThreshold", cfg.colorThreshold);
+}
+
+void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg) {
+    cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::PIE_SPIKE_ENABLED);
+    cfg.orangeRatioTarget = GetOr(tbl, "orangeRatioTarget", ConfigDefaults::PIE_SPIKE_ORANGE_RATIO_TARGET);
+    cfg.tolerance = GetOr(tbl, "tolerance", ConfigDefaults::PIE_SPIKE_TOLERANCE);
+    cfg.sampleRateMs = GetOr(tbl, "sampleRateMs", ConfigDefaults::PIE_SPIKE_SAMPLE_RATE_MS);
+    cfg.cooldownMs = GetOr(tbl, "cooldownMs", ConfigDefaults::PIE_SPIKE_COOLDOWN_MS);
+    cfg.visualAlert = GetOr(tbl, "visualAlert", ConfigDefaults::PIE_SPIKE_VISUAL_ALERT);
+    cfg.soundAlert = GetOr(tbl, "soundAlert", ConfigDefaults::PIE_SPIKE_SOUND_ALERT);
+    cfg.captureSize = GetOr(tbl, "captureSize", ConfigDefaults::PIE_SPIKE_CAPTURE_SIZE);
+    cfg.soundPath = GetStringOr(tbl, "soundPath", "");
+    cfg.orangeReference = ColorFromTomlArray(GetArray(tbl, "orangeReference"), {233/255.f, 109/255.f, 77/255.f});
+    cfg.greenReference = ColorFromTomlArray(GetArray(tbl, "greenReference"), {69/255.f, 204/255.f, 101/255.f});
+    cfg.colorThreshold = GetOr(tbl, "colorThreshold", ConfigDefaults::PIE_SPIKE_COLOR_THRESHOLD);
+}
+
 void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("configVersion", config.configVersion);
     out.insert("disableHookChaining", config.disableHookChaining);
@@ -1599,6 +1629,10 @@ void ConfigToToml(const Config& config, toml::table& out) {
     toml::table appearanceTbl;
     AppearanceConfigToToml(config.appearance, appearanceTbl);
     out.insert("appearance", appearanceTbl);
+
+    toml::table pieSpikeTbl;
+    PieSpikeConfigToToml(config.pieSpike, pieSpikeTbl);
+    out.insert("pieSpike", pieSpikeTbl);
 
     toml::array modesArr;
     for (const auto& mode : config.modes) {
@@ -1725,6 +1759,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     if (auto t = GetTable(tbl, "keyRebinds")) { KeyRebindsConfigFromToml(*t, config.keyRebinds); }
 
     if (auto t = GetTable(tbl, "appearance")) { AppearanceConfigFromToml(*t, config.appearance); }
+
+    if (auto t = GetTable(tbl, "pieSpike")) { PieSpikeConfigFromToml(*t, config.pieSpike); }
 
     config.modes.clear();
     if (auto arr = GetArray(tbl, "mode")) {

@@ -433,6 +433,21 @@ struct KeyRebindsConfig {
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };
+struct PieSpikeConfig {
+    bool enabled = false;
+    float orangeRatioTarget = 0.15f;
+    float tolerance = 0.03f;
+    int sampleRateMs = 200;
+    int cooldownMs = 3000;
+    bool visualAlert = true;
+    bool soundAlert = true;
+    int captureSize = 160;
+    std::string soundPath;
+    Color orangeReference = {233/255.f, 109/255.f, 77/255.f};
+    Color greenReference = {69/255.f, 204/255.f, 101/255.f};
+    float colorThreshold = 0.15f;
+};
+
 struct Config {
     int configVersion = 2;
     std::vector<MirrorConfig> mirrors;
@@ -465,6 +480,7 @@ struct Config {
     bool hideAnimationsInGame = false;
     KeyRebindsConfig keyRebinds;
     AppearanceConfig appearance;
+    PieSpikeConfig pieSpike;
     int keyRepeatStartDelay = 0;
     int keyRepeatDelay = 0;
     bool basicModeEnabled = false;
@@ -686,6 +702,10 @@ void RenderSettingsGUI();
 void RenderConfigErrorGUI();
 void RenderPerformanceOverlay(bool showPerformanceOverlay);
 void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay);
+
+extern std::atomic<bool> g_pieSpikeAlertActive;
+extern std::atomic<float> g_pieSpikeLastOrangeRatio;
+extern std::atomic<int64_t> g_pieSpikeLastAlertTimeMs;
 
 extern std::atomic<bool> g_welcomeToastVisible;
 extern std::atomic<bool> g_configurePromptDismissedThisSession;

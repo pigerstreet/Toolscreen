@@ -187,4 +187,15 @@ GLuint GetSafeReadTexture();
 
 // Note: OBS capture is now handled by obs_thread.h/cpp via glBlitFramebuffer hook
 
+// Pie spike detection: double-buffered analysis results (mirror thread writes, logic thread reads)
+struct PieSpikeAnalysisResult {
+    float orangeRatio = 0.0f;
+    int orangePixels = 0;
+    int greenPixels = 0;
+    int totalSampled = 0;
+    bool valid = false;
+};
+extern PieSpikeAnalysisResult g_pieSpikeResults[2];
+extern std::atomic<int> g_pieSpikeResultIndex;
+
 

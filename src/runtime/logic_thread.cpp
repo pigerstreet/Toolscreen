@@ -7,6 +7,7 @@
 #include "common/utils.h"
 #include "version.h"
 #include <Windows.h>
+#include <mmsystem.h>
 #include <thread>
 
 std::atomic<bool> g_logicThreadRunning{ false };
@@ -662,6 +663,42 @@ static void CheckAutoBorderless() {
     Log("[LogicThread] Auto-borderless queued");
 }
 
+static void CheckPieSpikeDetection() {
+    auto snap = GetConfigSnapshot();
+    if (!snap || !snap->pieSpike.enabled) return;
+
+    int readIdx = g_pieSpikeResultIndex.load(std::memory_order_acquire);
+    const PieSpikeAnalysisResult& result = g_pieSpikeResults[readIdx];
+
+    g_pieSpikeLastOrangeRatio.store(result.orangeRatio, std::memory_order_relaxed);
+
+    if (!result.valid) return;
+
+    const float target = snap->pieSpike.orangeRatioTarget;
+    const float tolerance = snap->pieSpike.tolerance;
+
+    bool spikeDetected = (result.orangeRatio >= target - tolerance) && (result.orangeRatio <= target + tolerance);
+    if (!spikeDetected) return;
+
+    // Cooldown check
+    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    int64_t lastAlert = g_pieSpikeLastAlertTimeMs.load(std::memory_order_relaxed);
+    if (nowMs - lastAlert < snap->pieSpike.cooldownMs) return;
+
+    g_pieSpikeAlertActive.store(true, std::memory_order_release);
+    g_pieSpikeLastAlertTimeMs.store(nowMs, std::memory_order_release);
+
+    if (snap->pieSpike.soundAlert) {
+        if (!snap->pieSpike.soundPath.empty()) {
+            std::wstring widePath = Utf8ToWide(snap->pieSpike.soundPath);
+            PlaySoundW(widePath.c_str(), NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        } else {
+            MessageBeep(MB_ICONEXCLAMATION);
+        }
+    }
+}
+
 static void LogicThreadFunc() {
     LogCategory("init", "[LogicThread] Started");
 
@@ -691,6 +728,7 @@ static void LogicThreadFunc() {
         ProcessPendingDimensionChange();
         CheckGameStateReset();
         CheckAutoBorderless();
+        CheckPieSpikeDetection();
 
         auto tickEnd = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tickEnd - tickStart);

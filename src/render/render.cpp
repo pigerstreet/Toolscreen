@@ -2850,6 +2850,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             request.welcomeToastIsFullscreen = isFullscreenMode;
             request.showWelcomeToast = wantWelcomeToast;
 
+            request.showPieSpikeAlert = g_pieSpikeAlertActive.load(std::memory_order_acquire);
+            request.pieSpikeAlertTimeMs = g_pieSpikeLastAlertTimeMs.load(std::memory_order_relaxed);
+
             request.backgroundIsImage = (modeToRender->background.selectedMode == "image");
             request.bgR = modeToRender->background.color.r;
             request.bgG = modeToRender->background.color.g;

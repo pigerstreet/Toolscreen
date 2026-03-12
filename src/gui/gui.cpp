@@ -718,6 +718,8 @@ void RenderSettingsGUI() {
 
 #include "tabs/tab_appearance.inl"
 
+#include "tabs/tab_pie_spike.inl"
+
 #include "tabs/tab_misc.inl"
 
 #include "tabs/tab_supporters.inl"

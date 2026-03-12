@@ -30,6 +30,7 @@ struct EyeZoomConfig;
 struct KeyRebind;
 struct KeyRebindsConfig;
 struct AppearanceConfig;
+struct PieSpikeConfig;
 struct Config;
 
 
@@ -59,6 +60,7 @@ void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out);
 void KeyRebindToToml(const KeyRebind& cfg, toml::table& out);
 void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out);
 void AppearanceConfigToToml(const AppearanceConfig& cfg, toml::table& out);
+void PieSpikeConfigToToml(const PieSpikeConfig& cfg, toml::table& out);
 void ConfigToToml(const Config& config, toml::table& out);
 
 
@@ -86,6 +88,7 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg);
 void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg);
 void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg);
 void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg);
+void PieSpikeConfigFromToml(const toml::table& tbl, PieSpikeConfig& cfg);
 void ConfigFromToml(const toml::table& tbl, Config& config);
 
 
