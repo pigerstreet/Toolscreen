@@ -1892,7 +1892,8 @@ static void MirrorCaptureThreadFunc(void* unused) {
                         auto it = g_mirrorInstances.find("Pie");
                         if (it != g_mirrorInstances.end()) {
                             const MirrorInstance& pieMirror = it->second;
-                            if (pieMirror.fboTextureBack != 0 && pieMirror.fbo_w > 0 && pieMirror.fbo_h > 0) {
+                            if (pieMirror.fboTextureBack != 0 && pieMirror.fbo_w > 0 && pieMirror.fbo_h > 0 &&
+                                pieMirror.hasFrameContentBack) {
                                 pieSrcTex = pieMirror.fboTextureBack;
                                 pieSrcW = pieMirror.fbo_w;
                                 pieSrcH = pieMirror.fbo_h;
