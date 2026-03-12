@@ -19,6 +19,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Read version from ToolscreenVersion.cmake
+        id: version
+        shell: pwsh
+        run: |
+          $content = Get-Content ToolscreenVersion.cmake -Raw
+          $major = [regex]::Match($content, 'VERSION_MAJOR\s+(\d+)').Groups[1].Value
+          $minor = [regex]::Match($content, 'VERSION_MINOR\s+(\d+)').Groups[1].Value
+          $patch = [regex]::Match($content, 'VERSION_PATCH\s+(\d+)').Groups[1].Value
+          $version = "$major.$minor.$patch"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Configure and build release artifacts
         shell: cmd
         run: build.bat release --test
@@ -50,7 +61,7 @@ jobs:
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: toolscreen-release-artifacts
+          name: toolscreen-v${{ steps.version.outputs.version }}
           if-no-files-found: error
           retention-days: 14
           path: |
