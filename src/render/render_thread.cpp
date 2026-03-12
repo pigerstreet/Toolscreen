@@ -3975,7 +3975,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
 
-            // Pie spike alert visual flash (translucent orange screen-edge quads)
+            // Pie spike alert visual flash (translucent orange full-screen overlay)
             if (request.pieSpikeAlertTimeMs > 0) {
                 auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
