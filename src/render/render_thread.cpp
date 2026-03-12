@@ -3975,7 +3975,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
 
-            // Pie spike alert — constant translucent orange overlay while spike detected
+            // Pie spike indicator — bottom-right corner dot, visible while spike detected
             if (request.showPieSpikeAlert) {
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -3988,12 +3988,19 @@ static void RenderThreadFunc(void* gameGLContext) {
                 glPushMatrix();
                 glLoadIdentity();
 
-                glColor4f(0.914f, 0.427f, 0.302f, 0.35f); // Orange (#E96D4D)
+                constexpr int kSize = 16;
+                constexpr int kMargin = 12;
+                int x1 = request.fullW - kMargin - kSize;
+                int y1 = kMargin; // bottom-right in OpenGL coords (Y=0 is bottom)
+                int x2 = x1 + kSize;
+                int y2 = y1 + kSize;
+
+                glColor4f(0.914f, 0.427f, 0.302f, 0.9f); // Orange (#E96D4D)
                 glBegin(GL_QUADS);
-                glVertex2i(0, 0);
-                glVertex2i(request.fullW, 0);
-                glVertex2i(request.fullW, request.fullH);
-                glVertex2i(0, request.fullH);
+                glVertex2i(x1, y1);
+                glVertex2i(x2, y1);
+                glVertex2i(x2, y2);
+                glVertex2i(x1, y2);
                 glEnd();
 
                 glMatrixMode(GL_PROJECTION);
