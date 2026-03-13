@@ -1204,6 +1204,7 @@ struct MT_PieSpikeGpuResources {
     GLuint fbo = 0;
     GLuint tex = 0;
     GLuint pbo = 0;
+    GLuint srcFbo = 0; // Cached read FBO (avoids per-frame alloc/delete)
     GLsync fence = nullptr;
     bool readbackPending = false;
     int texW = 0;
@@ -1260,26 +1261,31 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
 
             if (mapped) {
                 int orangeCount = 0, greenCount = 0;
-                const float oR = cfg.orangeReference.r, oG = cfg.orangeReference.g, oB = cfg.orangeReference.b;
-                const float gR = cfg.greenReference.r, gG = cfg.greenReference.g, gB = cfg.greenReference.b;
-                const float threshold = cfg.colorThreshold;
+                // Integer math: reference colors and threshold in 0-255 space (no per-pixel float conversion)
+                const int oR = static_cast<int>(cfg.orangeReference.r * 255.0f);
+                const int oG = static_cast<int>(cfg.orangeReference.g * 255.0f);
+                const int oB = static_cast<int>(cfg.orangeReference.b * 255.0f);
+                const int gR = static_cast<int>(cfg.greenReference.r * 255.0f);
+                const int gG = static_cast<int>(cfg.greenReference.g * 255.0f);
+                const int gB = static_cast<int>(cfg.greenReference.b * 255.0f);
+                const int threshSq = static_cast<int>(cfg.colorThreshold * 255.0f * cfg.colorThreshold * 255.0f);
                 const int w = res.texW;
                 const int h = res.texH;
-                const int step = 2; // Sample every other pixel for speed
+                const int step = 2;
 
                 for (int y = 0; y < h; y += step) {
                     const unsigned char* row = mapped + (static_cast<size_t>(y) * w * 4);
                     for (int x = 0; x < w; x += step) {
                         const int idx = x * 4;
-                        const float r = row[idx] / 255.0f;
-                        const float g = row[idx + 1] / 255.0f;
-                        const float b = row[idx + 2] / 255.0f;
+                        const int r = row[idx];
+                        const int g = row[idx + 1];
+                        const int b = row[idx + 2];
 
-                        float dOrange = (r - oR) * (r - oR) + (g - oG) * (g - oG) + (b - oB) * (b - oB);
-                        float dGreen = (r - gR) * (r - gR) + (g - gG) * (g - gG) + (b - gB) * (b - gB);
+                        int dOrange = (r - oR) * (r - oR) + (g - oG) * (g - oG) + (b - oB) * (b - oB);
+                        int dGreen = (r - gR) * (r - gR) + (g - gG) * (g - gG) + (b - gB) * (b - gB);
 
-                        if (dOrange < threshold * threshold) { orangeCount++; }
-                        else if (dGreen < threshold * threshold) { greenCount++; }
+                        if (dOrange < threshSq) { orangeCount++; }
+                        else if (dGreen < threshSq) { greenCount++; }
                     }
                 }
 
@@ -1350,24 +1356,35 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
         res.fence = nullptr;
     }
 
-    // Blit source texture region into our capture FBO
-    GLuint srcFbo = 0;
-    glGenFramebuffers(1, &srcFbo);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, res.fbo);
-    glBlitFramebuffer(capX, capY, capX + captureW, capY + captureH,
-                      0, 0, captureW, captureH,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    glDeleteFramebuffers(1, &srcFbo);
+    // Ensure cached read FBO exists
+    if (res.srcFbo == 0) {
+        glGenFramebuffers(1, &res.srcFbo);
+    }
 
-    // Async PBO readback
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, res.fbo);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
-    glReadPixels(0, 0, captureW, captureH, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    if (fromMirror) {
+        // Direct readback from mirror's FBO texture — no blit needed
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, res.srcFbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
+        glReadPixels(0, 0, captureW, captureH, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    } else {
+        // Legacy: blit source region into our capture FBO, then readback
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, res.srcFbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, res.fbo);
+        glBlitFramebuffer(capX, capY, capX + captureW, capY + captureH,
+                          0, 0, captureW, captureH,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, res.fbo);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, res.pbo);
+        glReadPixels(0, 0, captureW, captureH, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
 
     res.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     res.readbackPending = true;
@@ -1937,6 +1954,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
         if (pieSpikeRes.fbo) { glDeleteFramebuffers(1, &pieSpikeRes.fbo); }
         if (pieSpikeRes.tex) { glDeleteTextures(1, &pieSpikeRes.tex); }
         if (pieSpikeRes.pbo) { glDeleteBuffers(1, &pieSpikeRes.pbo); }
+        if (pieSpikeRes.srcFbo) { glDeleteFramebuffers(1, &pieSpikeRes.srcFbo); }
         if (pieSpikeRes.fence && glIsSync(pieSpikeRes.fence)) { glDeleteSync(pieSpikeRes.fence); }
 
         // Cleanup mirror-thread local FBOs and PBOs
