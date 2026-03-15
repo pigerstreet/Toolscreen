@@ -2026,7 +2026,7 @@ static void RenderCachedEyeZoomTextLabels() {
         labels.swap(s_eyezoomTextLabels);
     }
 
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     ImFont* font = g_overlayTextFont ? g_overlayTextFont : ImGui::GetFont();
     const float fontSize = (std::max)(1.0f, g_overlayTextFontSize);
 
