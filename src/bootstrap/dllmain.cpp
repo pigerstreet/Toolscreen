@@ -1576,7 +1576,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     if (viewport.valid) {
                         if (needCaptureForMirrors && !needCaptureForEyeZoom && !needCaptureForObsOrVc) {
                             const int maxMirrorFps = g_activeMirrorCaptureMaxFps.load(std::memory_order_acquire);
-                            if (maxMirrorFps > 0) {
+                            if (maxMirrorFps > 0 && !IsMirrorRealtimeFps(maxMirrorFps)) {
                                 const auto now = std::chrono::steady_clock::now();
                                 const double intervalMsD = 1000.0 / static_cast<double>((std::max)(1, maxMirrorFps));
                                 const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(

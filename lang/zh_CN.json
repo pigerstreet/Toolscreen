@@ -349,6 +349,7 @@
     "label.toggle_window_overlays": "切换窗口投影：",
     "label.toolscreen": "Toolscreen",
     "label.type": "类型：",
+    "label.realtime": "实时",
     "label.unlimited": "无限制",
     "label.variables": "变量：screenWidth, screenHeight",
     "label.warning": "警告：",

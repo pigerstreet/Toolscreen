@@ -17,14 +17,13 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
         bool is_selected = (selectedMirrorName == mirror.name);
         ImGuiTreeNodeFlags node_flags = ImGuiTreeNodeFlags_SpanAvailWidth | (is_selected ? ImGuiTreeNodeFlags_Selected : 0);
 
+        std::string popup_id = (tr("mirrors.delete_mirror") + "##" + std::to_string(i));
         std::string delete_button_label = "X##delete_mirror_" + std::to_string(i);
         if (ImGui::Button(delete_button_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
-            std::string popup_id = "Delete Mirror?##" + std::to_string(i);
             ImGui::OpenPopup(popup_id.c_str());
         }
 
         // Popup modal outside of node_open block so it can be displayed even when collapsed
-        std::string popup_id = (tr("mirrors.delete_mirror") + "##" + std::to_string(i));
         if (ImGui::BeginPopupModal(popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text(tr("mirrors.delete_mirror_confirm", mirror.name.c_str()).c_str());
             ImGui::Separator();
@@ -114,7 +113,12 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             ImGui::SetColumnWidth(0, 150);
             ImGui::Text(trc("label.fps"));
             ImGui::NextColumn();
-            if (Spinner("##fps", &mirror.fps, 1, 1)) {
+            int mirrorFpsSliderValue = (mirror.fps >= kMirrorRealtimeSliderValue) ? kMirrorRealtimeSliderValue
+                                                                                   : (std::max)(5, (std::min)(mirror.fps, kMirrorRealtimeSliderValue - 1));
+            ImGui::SetNextItemWidth(180.0f);
+            if (ImGui::SliderInt("##fps", &mirrorFpsSliderValue, 5, kMirrorRealtimeSliderValue,
+                                 mirrorFpsSliderValue == kMirrorRealtimeSliderValue ? trc("label.realtime") : "%d fps")) {
+                mirror.fps = (mirrorFpsSliderValue == kMirrorRealtimeSliderValue) ? kMirrorRealtimeFps : mirrorFpsSliderValue;
                 g_configIsDirty = true;
                 // Sync FPS to mirror thread immediately
                 UpdateMirrorFPS(mirror.name, mirror.fps);

@@ -23,6 +23,17 @@ extern std::atomic<int> g_activeMirrorCaptureCount;
 // Maximum requested FPS among active mirrors (summary of ThreadedMirrorConfig::fps).
 extern std::atomic<int> g_activeMirrorCaptureMaxFps;
 
+constexpr int kMirrorRealtimeSliderValue = 500;
+constexpr int kMirrorRealtimeFps = 10000;
+
+inline bool IsMirrorRealtimeFps(int fps) {
+    return fps >= kMirrorRealtimeFps;
+}
+
+inline bool MirrorUsesEveryFrameUpdates(int fps) {
+    return fps <= 0 || IsMirrorRealtimeFps(fps);
+}
+
 // Named ThreadedMirrorConfig to avoid conflict with MirrorCaptureConfig in gui.h
 struct ThreadedMirrorConfig {
     std::string name;

@@ -2136,7 +2136,7 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
         if (it == g_mirrorInstances.end()) { continue; }
 
         MirrorInstance* inst = &it->second;
-        if (conf.fps > 0 && inst->forceUpdateFrames <= 0) {
+        if (!MirrorUsesEveryFrameUpdates(conf.fps) && inst->forceUpdateFrames <= 0) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - inst->lastUpdateTime).count();
             if (elapsed < (1000 / conf.fps)) { continue; }
         }

@@ -4551,10 +4551,10 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                     bool needsResize = (inst.fbo_w != requiredFboW || inst.fbo_h != requiredFboH);
 
                     bool needsUpdate = needsResize || inst.forceUpdateFrames > 0;
-                    if (!needsUpdate && conf.fps > 0) {
+                    if (!needsUpdate && !MirrorUsesEveryFrameUpdates(conf.fps)) {
                         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - inst.lastUpdateTime).count();
                         needsUpdate = (elapsed >= (1000 / conf.fps));
-                    } else if (!needsUpdate && conf.fps <= 0) {
+                    } else if (!needsUpdate && MirrorUsesEveryFrameUpdates(conf.fps)) {
                         needsUpdate = true;
                     }
 

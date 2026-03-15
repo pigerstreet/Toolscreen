@@ -349,6 +349,7 @@
     "label.toggle_window_overlays": "Toggle Window Overlays:",
     "label.toolscreen": "Toolscreen",
     "label.type": "Type:",
+    "label.realtime": "Realtime",
     "label.unlimited": "Unlimited",
     "label.variables": "Variables: screenWidth, screenHeight",
     "label.warning": "WARNING:",
