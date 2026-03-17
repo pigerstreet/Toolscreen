@@ -944,16 +944,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                         const bool showShiftLayerText = showRebindInfo && hasShiftLayerOverride(rb, vk);
                         const std::string shiftLayerText =
                             showShiftLayerText ? normalizeMouseButtonLabel(typesShiftValueForDisplay(rb, vk)) : std::string();
-                        auto equalsIgnoreCase = [](const std::string& a, const std::string& b) -> bool {
-                            if (a.size() != b.size()) return false;
-                            for (size_t i = 0; i < a.size(); ++i) {
-                                if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) {
-                                    return false;
-                                }
-                            }
-                            return true;
-                        };
-                        const bool showSecondaryText = showRebindInfo && !secondaryText.empty() && !equalsIgnoreCase(primaryText, secondaryText);
+                        const bool showSecondaryText = showRebindInfo && !secondaryText.empty();
 
                         ImFont* fLabel = g_keyboardLayoutPrimaryFont ? g_keyboardLayoutPrimaryFont : ImGui::GetFont();
                         ImFont* fSecondary = g_keyboardLayoutSecondaryFont ? g_keyboardLayoutSecondaryFont : fLabel;
@@ -1050,17 +1041,20 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                         const ImU32 infoCol = (rb && !rb->enabled) ? IM_COL32(255, 220, 170, 235) : IM_COL32(245, 245, 245, 235);
 
                         if (showShiftLayerText && showSecondaryText) {
-                            ImFont* fTopShift = fLabel;
+                            ImFont* fTopRow = fLabel;
                             const float topRowBoost = 1.12f;
                             const float pairTopPadY = snapPxText((padY * 0.40f) - (0.5f * keyboardScale));
                             const float pairBottomPadY = snapPxText(padY * 0.55f);
                             const float pairTextAvailH = size.y - pairTopPadY - pairBottomPadY;
 
-                            float primaryFs = snapFontSize(fLabel->LegacySize * layoutTextBoost * topRowBoost);
-                            ImVec2 primarySz = fLabel->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
-
-                            float shiftFs = primaryFs;
-                            ImVec2 shiftSz = fTopShift->CalcTextSizeA(shiftFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
+                            float topRowFs = snapFontSize(fTopRow->LegacySize * layoutTextBoost * topRowBoost);
+                            ImVec2 shiftSz = ImVec2(0.0f, 0.0f);
+                            ImVec2 primarySz = ImVec2(0.0f, 0.0f);
+                            auto recalcTopPair = [&]() {
+                                shiftSz = fTopRow->CalcTextSizeA(topRowFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
+                                primarySz = fTopRow->CalcTextSizeA(topRowFs, FLT_MAX, 0.0f, primaryText.c_str());
+                            };
+                            recalcTopPair();
 
                             float secondaryFs = snapFontSize(fSecondary->LegacySize * layoutTextBoost);
                             ImVec2 secondarySz = fSecondary->CalcTextSizeA(secondaryFs, FLT_MAX, 0.0f, secondaryText.c_str());
@@ -1079,31 +1073,19 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                 if (textAvailW > 8.0f && combinedW > textAvailW) {
                                     float fit = textAvailW / (combinedW + 0.001f);
                                     if (fit < 1.0f) {
-                                        shiftFs = (shiftFs * fit < 6.0f) ? 6.0f : shiftFs * fit;
-                                        primaryFs = (primaryFs * fit < 6.0f) ? 6.0f : primaryFs * fit;
-                                        shiftSz = fTopShift->CalcTextSizeA(shiftFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
-                                        primarySz = fLabel->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
+                                        topRowFs = (topRowFs * fit < 6.0f) ? 6.0f : topRowFs * fit;
+                                        recalcTopPair();
                                         combinedW = shiftSz.x + topGapX + primarySz.x;
                                     }
 
                                     if (combinedW > textAvailW) {
-                                        const float pairAvailW = textAvailW - topGapX;
-                                        if (pairAvailW > 8.0f) {
-                                            const float shiftRatio = shiftSz.x / (shiftSz.x + primarySz.x + 0.001f);
-                                            float shiftAvailW = pairAvailW * shiftRatio;
-                                            float primaryAvailW = pairAvailW - shiftAvailW;
-                                            if (shiftAvailW < 4.0f) shiftAvailW = 4.0f;
-                                            if (primaryAvailW < 4.0f) primaryAvailW = 4.0f;
-
-                                            const auto fittedShift =
-                                                fitTextToWidth(fTopShift, shiftFs, shiftLayerText, shiftAvailW, 6.0f);
-                                            shiftFs = fittedShift.first;
-                                            shiftSz = fittedShift.second;
-
-                                            const auto fittedPrimary =
-                                                fitTextToWidth(fLabel, primaryFs, primaryText, primaryAvailW, 6.0f);
-                                            primaryFs = fittedPrimary.first;
-                                            primarySz = fittedPrimary.second;
+                                        const float widestTopLabel = (shiftSz.x > primarySz.x) ? shiftSz.x : primarySz.x;
+                                        if (widestTopLabel > 0.0f) {
+                                            const float maxWidthFit = (textAvailW - topGapX) / (widestTopLabel + 0.001f);
+                                            if (maxWidthFit < 1.0f) {
+                                                topRowFs = (topRowFs * maxWidthFit < 6.0f) ? 6.0f : topRowFs * maxWidthFit;
+                                                recalcTopPair();
+                                            }
                                         }
                                     }
                                 }
@@ -1119,12 +1101,10 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             if (pairTextAvailH > 0.0f && totalH > pairTextAvailH) {
                                 const float fit = pairTextAvailH / (totalH + 0.001f);
                                 if (fit < 1.0f) {
-                                    shiftFs = (shiftFs * fit < 6.0f) ? 6.0f : shiftFs * fit;
-                                    primaryFs = (primaryFs * fit < 6.0f) ? 6.0f : primaryFs * fit;
+                                    topRowFs = (topRowFs * fit < 6.0f) ? 6.0f : topRowFs * fit;
                                     secondaryFs = (secondaryFs * fit < 6.0f) ? 6.0f : secondaryFs * fit;
 
-                                    shiftSz = fTopShift->CalcTextSizeA(shiftFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
-                                    primarySz = fLabel->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
+                                    recalcTopPair();
                                     if (textAvailW > 8.0f) {
                                         const auto fittedSecondary =
                                             fitTextToWidth(fSecondary, secondaryFs, secondaryText, textAvailW, 6.0f);
@@ -1157,8 +1137,8 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             const float primaryY = snapPxText(topY + (topRowH - primarySz.y) * 0.5f);
                             const float secondaryX = centerTextXWithin(textMinX, textMaxX, secondarySz.x);
 
-                            dl->AddText(fTopShift, shiftFs, ImVec2(shiftX, shiftY), shiftCol, shiftLayerText.c_str());
-                            dl->AddText(fLabel, primaryFs, ImVec2(primaryX, primaryY), theme.text, primaryText.c_str());
+                            dl->AddText(fTopRow, topRowFs, ImVec2(shiftX, shiftY), shiftCol, shiftLayerText.c_str());
+                            dl->AddText(fTopRow, topRowFs, ImVec2(primaryX, primaryY), theme.text, primaryText.c_str());
                             dl->AddText(fSecondary, secondaryFs, ImVec2(secondaryX, secondaryY), infoCol, secondaryText.c_str());
                         } else if (!showRebindInfo || !showSecondaryText) {
                             if (showShiftLayerText) {
