@@ -1,6 +1,8 @@
 if (ImGui::BeginTabItem(trc("tabs.modes"))) {
     g_currentlyEditingMirror = "";
     int mode_to_remove = -1;
+    static std::string pendingDefaultModeId;
+    static std::string selectedDefaultModeId;
 
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -22,7 +24,6 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
     }
 
     SliderCtrlClickTip();
-    ImGui::Text(trc("modes.status.current_default_mode", g_config.defaultMode));
 
     ImGui::SeparatorText(trc("modes.status.default_modes"));
 
@@ -136,11 +137,6 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI mode list";
                     Log("[GUI] Deferred mode switch to: " + mode.id);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button((tr("modes.set_as_default") + "##Fullscreen").c_str())) {
-                    g_config.defaultMode = mode.id;
-                    g_configIsDirty = true;
                 }
                 mode.stretch.enabled = true;
                 mode.stretch.x = 0;
@@ -397,11 +393,6 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI EyeZoom mode";
                     Log("[GUI] Deferred mode switch to: " + mode.id);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button((tr("modes.set_as_default") + "##EyeZoom").c_str())) {
-                    g_config.defaultMode = mode.id;
-                    g_configIsDirty = true;
                 }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
@@ -1165,11 +1156,6 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI Preemptive mode";
                 }
-                ImGui::SameLine();
-                if (ImGui::Button((tr("modes.set_as_default") + "##Preemptive").c_str())) {
-                    g_config.defaultMode = mode.id;
-                    g_configIsDirty = true;
-                }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
 
@@ -1622,11 +1608,6 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI Thin mode";
                 }
-                ImGui::SameLine();
-                if (ImGui::Button((tr("modes.set_as_default") + "##Thin").c_str())) {
-                    g_config.defaultMode = mode.id;
-                    g_configIsDirty = true;
-                }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
 
@@ -2045,11 +2026,6 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     g_pendingModeSwitch.pending = true;
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI Wide mode";
-                }
-                ImGui::SameLine();
-                if (ImGui::Button((tr("modes.set_as_default") + "##Wide").c_str())) {
-                    g_config.defaultMode = mode.id;
-                    g_configIsDirty = true;
                 }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
@@ -2561,11 +2537,6 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI mode detail";
                     Log("[GUI] Deferred mode switch to: " + mode.id);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button(trc("modes.set_as_default"))) {
-                    g_config.defaultMode = mode.id;
-                    g_configIsDirty = true;
                 }
 
                 ImGui::Separator();
@@ -3101,6 +3072,54 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
     }
 
     ImGui::Separator();
+
+    ImGui::Text(trc("modes.status.current_default_mode", g_config.defaultMode));
+    ImGui::SameLine();
+    if (ImGui::Button((tr("button.change") + "##modes_default_mode").c_str())) {
+        selectedDefaultModeId = g_config.defaultMode;
+        ImGui::OpenPopup((tr("modes.change_default_mode") + "##mode_picker").c_str());
+    }
+
+    if (ImGui::BeginPopupModal((tr("modes.change_default_mode") + "##mode_picker").c_str(), NULL,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text(trc("modes.status.current_default_mode", g_config.defaultMode));
+
+        const char* comboPreview = selectedDefaultModeId.empty() ? g_config.defaultMode.c_str() : selectedDefaultModeId.c_str();
+        if (ImGui::BeginCombo("##default_mode_selector", comboPreview)) {
+            for (const auto& mode : g_config.modes) {
+                const bool isSelected = EqualsIgnoreCase(mode.id, selectedDefaultModeId);
+                if (ImGui::Selectable(mode.id.c_str(), isSelected)) {
+                    selectedDefaultModeId = mode.id;
+                    if (!EqualsIgnoreCase(mode.id, g_config.defaultMode)) {
+                        pendingDefaultModeId = mode.id;
+                        ImGui::OpenPopup((tr("modes.change_default_mode_confirm") + "##confirm").c_str());
+                    }
+                }
+                if (isSelected) { ImGui::SetItemDefaultFocus(); }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (ImGui::BeginPopupModal((tr("modes.change_default_mode_confirm") + "##confirm").c_str(), NULL,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped(trc("modes.change_default_mode_confirm_message", pendingDefaultModeId));
+            ImGui::Separator();
+            if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
+                g_config.defaultMode = pendingDefaultModeId;
+                selectedDefaultModeId = pendingDefaultModeId;
+                g_configIsDirty = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button(trc("button.close"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+
+        ImGui::EndPopup();
+    }
 
     if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
