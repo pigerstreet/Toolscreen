@@ -303,8 +303,9 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
                     HelpMarker(trc("eyezoom.tooltip"));
                 } else if (eyezoomInline == EyeZoomInlineKind::ControlsOnly) {
                     ImGui::TableSetColumnIndex(0);
-                    int maxCloneWidth = (modeConfig ? modeConfig->width : maxWidth);
+                        int maxCloneWidth = (modeConfig ? modeConfig->width : maxWidth);
                     if (maxCloneWidth < 2) maxCloneWidth = 2;
+                        if (maxCloneWidth < g_config.eyezoom.cloneWidth) maxCloneWidth = g_config.eyezoom.cloneWidth;
                     if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth, 64, 3)) {
                         if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
                         int maxOverlay = g_config.eyezoom.cloneWidth / 2;

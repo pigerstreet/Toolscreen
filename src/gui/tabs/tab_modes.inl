@@ -406,7 +406,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 ImGui::Text(trc("modes.eyezoom.clone_width"));
                 ImGui::NextColumn();
                 // Clone Width must be even - step by 2, enforce even values
-                int maxCloneWidth = mode.width;
+                    int maxCloneWidth = mode.width;
+                    if (maxCloneWidth < g_config.eyezoom.cloneWidth) maxCloneWidth = g_config.eyezoom.cloneWidth;
                 if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth)) {
                     if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
                     int maxOverlay = g_config.eyezoom.cloneWidth / 2;
@@ -416,7 +417,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 ImGui::NextColumn();
                 ImGui::Text(trc("modes.eyezoom.clone_height"));
                 ImGui::NextColumn();
-                int maxCloneHeight = mode.height;
+                    int maxCloneHeight = mode.height;
+                    if (maxCloneHeight < g_config.eyezoom.cloneHeight) maxCloneHeight = g_config.eyezoom.cloneHeight;
                 if (Spinner("##EyeZoomCloneHeight", &g_config.eyezoom.cloneHeight, 10, 1, maxCloneHeight)) g_configIsDirty = true;
                 ImGui::Columns(1);
 
