@@ -95,6 +95,7 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
         g_config.hotkeys.erase(std::remove_if(g_config.hotkeys.begin(), g_config.hotkeys.end(),
                                               [&](const HotkeyConfig& h) { return EqualsIgnoreCase(h.secondaryMode, modeId); }),
                                g_config.hotkeys.end());
+        RemoveInvalidHotkeyModeReferences(g_config);
         ResetAllHotkeySecondaryModes();
         std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
         RebuildHotkeyMainKeys_Internal();

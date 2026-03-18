@@ -738,6 +738,7 @@ void ApplyAppearanceConfig();
 void SaveTheme();
 void LoadTheme();
 void LoadConfig();
+bool RemoveInvalidHotkeyModeReferences(Config& config);
 void CopyToClipboard(HWND hwnd, const std::string& text);
 
 std::string GameTransitionTypeToString(GameTransitionType type);

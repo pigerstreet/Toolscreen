@@ -55,6 +55,69 @@ std::string BackgroundTransitionTypeToString(BackgroundTransitionType type) {
 
 BackgroundTransitionType StringToBackgroundTransitionType(const std::string&) { return BackgroundTransitionType::Cut; }
 
+bool RemoveInvalidHotkeyModeReferences(Config& config) {
+    auto modeExists = [&](const std::string& modeId) -> bool {
+        if (modeId.empty()) { return false; }
+        for (const auto& mode : config.modes) {
+            if (EqualsIgnoreCase(mode.id, modeId)) { return true; }
+        }
+        return false;
+    };
+
+    std::string fallbackMainMode;
+    if (modeExists(config.defaultMode)) {
+        fallbackMainMode = config.defaultMode;
+    } else if (modeExists("Fullscreen")) {
+        fallbackMainMode = "Fullscreen";
+    } else if (!config.modes.empty()) {
+        fallbackMainMode = config.modes.front().id;
+    }
+
+    bool changed = false;
+    size_t mainModeResetCount = 0;
+    size_t secondaryModeClearedCount = 0;
+    size_t altModeRemovedCount = 0;
+    for (auto& hotkey : config.hotkeys) {
+        if (hotkey.mainMode.empty()) {
+            if (!fallbackMainMode.empty()) {
+                hotkey.mainMode = fallbackMainMode;
+                changed = true;
+                ++mainModeResetCount;
+            }
+        } else if (!modeExists(hotkey.mainMode)) {
+            if (hotkey.mainMode != fallbackMainMode) {
+                hotkey.mainMode = fallbackMainMode;
+                changed = true;
+                ++mainModeResetCount;
+            }
+        }
+
+        if (!hotkey.secondaryMode.empty() && !modeExists(hotkey.secondaryMode)) {
+            hotkey.secondaryMode.clear();
+            changed = true;
+            ++secondaryModeClearedCount;
+        }
+
+        const auto newEnd = std::remove_if(hotkey.altSecondaryModes.begin(), hotkey.altSecondaryModes.end(),
+                                           [&](const AltSecondaryMode& alt) {
+                                               return !alt.mode.empty() && !modeExists(alt.mode);
+                                           });
+        if (newEnd != hotkey.altSecondaryModes.end()) {
+            altModeRemovedCount += static_cast<size_t>(std::distance(newEnd, hotkey.altSecondaryModes.end()));
+            hotkey.altSecondaryModes.erase(newEnd, hotkey.altSecondaryModes.end());
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        Log("Sanitized hotkey mode references: reset " + std::to_string(mainModeResetCount) + " main mode reference(s), cleared " +
+            std::to_string(secondaryModeClearedCount) + " secondary mode reference(s), removed " +
+            std::to_string(altModeRemovedCount) + " alt mode reference(s).");
+    }
+
+    return changed;
+}
+
 void CopyToClipboard(HWND hwnd, const std::string& text) {
     if (!OpenClipboard(hwnd)) {
         Log("ERROR: Could not open clipboard. Error code: " + std::to_string(GetLastError()));
@@ -598,9 +661,7 @@ void LoadConfig() {
             }
         }
 
-        for (auto& hotkey : g_config.hotkeys) {
-            if (hotkey.mainMode.empty()) { hotkey.mainMode = g_config.defaultMode; }
-        }
+        if (RemoveInvalidHotkeyModeReferences(g_config)) { g_configIsDirty = true; }
 
         ResetAllHotkeySecondaryModes();
 

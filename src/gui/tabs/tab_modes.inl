@@ -2938,13 +2938,14 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
     if (mode_to_remove != -1) {
         auto& modeToDelete = g_config.modes[mode_to_remove];
         if (!IsHardcodedMode(modeToDelete.id)) {
+            const std::string removedModeId = modeToDelete.id;
             std::string currentMode;
             {
                 std::lock_guard<std::mutex> modeLock(g_modeIdMutex);
                 currentMode = g_currentModeId;
             }
-            if (EqualsIgnoreCase(currentMode, modeToDelete.id)) {
-                std::string fallbackMode = (EqualsIgnoreCase(g_config.defaultMode, modeToDelete.id) || g_config.defaultMode.empty())
+            if (EqualsIgnoreCase(currentMode, removedModeId)) {
+                std::string fallbackMode = (EqualsIgnoreCase(g_config.defaultMode, removedModeId) || g_config.defaultMode.empty())
                                                ? "Fullscreen" : g_config.defaultMode;
                 std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
                 g_pendingModeSwitch.pending = true;
@@ -2952,12 +2953,16 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 g_pendingModeSwitch.source = "Mode deleted";
                 g_pendingModeSwitch.isPreview = false;
                 g_pendingModeSwitch.forceInstant = true;
-                Log("[GUI] Mode '" + modeToDelete.id + "' was active and is being deleted - switching to " + fallbackMode);
+                Log("[GUI] Mode '" + removedModeId + "' was active and is being deleted - switching to " + fallbackMode);
             }
-            if (EqualsIgnoreCase(g_config.defaultMode, modeToDelete.id)) {
+            if (EqualsIgnoreCase(g_config.defaultMode, removedModeId)) {
                 g_config.defaultMode = "Fullscreen";
             }
             g_config.modes.erase(g_config.modes.begin() + mode_to_remove);
+            RemoveInvalidHotkeyModeReferences(g_config);
+            ResetAllHotkeySecondaryModes();
+            std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+            RebuildHotkeyMainKeys_Internal();
             g_configIsDirty = true;
         }
     }
@@ -3058,6 +3063,12 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 }
             }
 
+            RemoveInvalidHotkeyModeReferences(g_config);
+            ResetAllHotkeySecondaryModes();
+            {
+                std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+                RebuildHotkeyMainKeys_Internal();
+            }
             RecalculateModeDimensions();
 
             g_configIsDirty = true;
