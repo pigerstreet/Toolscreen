@@ -2,6 +2,7 @@
 
 
 #include "features/fake_cursor.h"
+#include "features/browser_overlay.h"
 #include "gui/gui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -123,6 +124,7 @@ bool HasDuplicateModeName(const std::string& name, size_t currentIndex);
 bool HasDuplicateMirrorName(const std::string& name, size_t currentIndex);
 bool HasDuplicateImageName(const std::string& name, size_t currentIndex);
 bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex);
+bool HasDuplicateBrowserOverlayName(const std::string& name, size_t currentIndex);
 bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex);
 
 
@@ -134,6 +136,7 @@ std::vector<ModeConfig> GetDefaultModes();
 std::vector<MirrorConfig> GetDefaultMirrors();
 std::vector<ImageConfig> GetDefaultImages();
 std::vector<WindowOverlayConfig> GetDefaultWindowOverlays();
+std::vector<BrowserOverlayConfig> GetDefaultBrowserOverlays();
 std::vector<HotkeyConfig> GetDefaultHotkeys();
 CursorsConfig GetDefaultCursors();
 EyeZoomConfig GetDefaultEyeZoomConfig();
@@ -159,6 +162,7 @@ void RenderModesTab();
 void RenderMirrorsTab();
 void RenderImagesTab();
 void RenderWindowOverlaysTab();
+void RenderBrowserOverlaysTab();
 void RenderHotkeysTab();
 void RenderMouseTab();
 void RenderSettingsTab();

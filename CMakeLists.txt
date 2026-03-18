@@ -145,6 +145,12 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
+FetchContent_Declare(
+    webview2_sdk
+    URL https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.3650.58
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
 FetchContent_GetProperties(glew)
 if(NOT glew_POPULATED)
     FetchContent_Populate(glew)
@@ -174,6 +180,28 @@ endif()
 FetchContent_GetProperties(nlohmann_json)
 if(NOT nlohmann_json_POPULATED)
     FetchContent_Populate(nlohmann_json)
+endif()
+
+FetchContent_GetProperties(webview2_sdk)
+if(NOT webview2_sdk_POPULATED)
+    FetchContent_Populate(webview2_sdk)
+endif()
+
+set(TOOLSCREEN_WEBVIEW2_NATIVE_DIR "${webview2_sdk_SOURCE_DIR}/build/native")
+set(TOOLSCREEN_WEBVIEW2_INCLUDE_DIR "${TOOLSCREEN_WEBVIEW2_NATIVE_DIR}/include")
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(TOOLSCREEN_WEBVIEW2_ARCH_DIR "x64")
+else()
+    set(TOOLSCREEN_WEBVIEW2_ARCH_DIR "x86")
+endif()
+set(TOOLSCREEN_WEBVIEW2_LOADER_DLL "${TOOLSCREEN_WEBVIEW2_NATIVE_DIR}/${TOOLSCREEN_WEBVIEW2_ARCH_DIR}/WebView2Loader.dll")
+
+if(NOT EXISTS "${TOOLSCREEN_WEBVIEW2_INCLUDE_DIR}/WebView2.h")
+    message(FATAL_ERROR "WebView2 SDK headers were not found at ${TOOLSCREEN_WEBVIEW2_INCLUDE_DIR}")
+endif()
+
+if(NOT EXISTS "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}")
+    message(FATAL_ERROR "WebView2Loader.dll was not found at ${TOOLSCREEN_WEBVIEW2_LOADER_DLL}")
 endif()
 
 set(TOOLSCREEN_IMGUI_DIR "${imgui_SOURCE_DIR}")
@@ -263,6 +291,7 @@ source_group("Generated Files" FILES ${TOOLSCREEN_GENERATED_VERSION_HEADER})
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${TOOLSCREEN_GENERATED_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${TOOLSCREEN_WEBVIEW2_INCLUDE_DIR}
     ${nlohmann_json_SOURCE_DIR}/single_include
 )
 
@@ -307,6 +336,11 @@ endif()
 
 toolscreen_configure_target_outputs(${PROJECT_NAME})
 toolscreen_enable_release_symbols(${PROJECT_NAME})
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll"
+    COMMENT "Copying WebView2Loader.dll next to Toolscreen.dll"
+)
 
 enable_testing()
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cmake")
@@ -388,6 +422,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         COMMAND "${TOOLSCREEN_MAVEN_EXECUTABLE}" -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" clean package -q
                 -Dbrand.name=Toolscreen
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${easyinjectbundled_SOURCE_DIR}/target/${JAR_NAME}" "${JAR_OUTPUT}"
@@ -426,6 +461,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     add_custom_target(toolscreen_prepare_easyinject_exe_inputs
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         DEPENDS ${PROJECT_NAME}
         COMMENT "Preparing EasyInject exe packaging inputs"
         VERBATIM

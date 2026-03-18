@@ -88,6 +88,17 @@ inline const std::string WINDOW_OVERLAY_CAPTURE_METHOD = "Windows 10+";
 constexpr bool WINDOW_OVERLAY_FORCE_UPDATE = false;
 constexpr bool WINDOW_OVERLAY_ENABLE_INTERACTION = false;
 
+constexpr int BROWSER_OVERLAY_WIDTH = 1280;
+constexpr int BROWSER_OVERLAY_HEIGHT = 720;
+constexpr int BROWSER_OVERLAY_FPS = 15;
+inline const std::string BROWSER_OVERLAY_CUSTOM_CSS = "";
+constexpr bool BROWSER_OVERLAY_HIGH_PERFORMANCE_MODE = false;
+constexpr bool BROWSER_OVERLAY_ENABLE_COLOR_KEY = false;
+constexpr bool BROWSER_OVERLAY_TRANSPARENT_BACKGROUND = false;
+constexpr bool BROWSER_OVERLAY_MUTE_AUDIO = true;
+constexpr bool BROWSER_OVERLAY_RELOAD_ON_UPDATE = false;
+constexpr int BROWSER_OVERLAY_RELOAD_INTERVAL = 0;
+
 constexpr int MODE_WIDTH = 0;
 constexpr int MODE_HEIGHT = 0;
 constexpr int MODE_TRANSITION_DURATION_MS = 500;

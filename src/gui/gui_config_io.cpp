@@ -243,6 +243,10 @@ std::vector<WindowOverlayConfig> GetDefaultWindowOverlays() {
     return std::vector<WindowOverlayConfig>();
 }
 
+std::vector<BrowserOverlayConfig> GetDefaultBrowserOverlays() {
+    return std::vector<BrowserOverlayConfig>();
+}
+
 std::vector<HotkeyConfig> GetDefaultHotkeys() { return GetDefaultHotkeysFromEmbedded(); }
 CursorsConfig GetDefaultCursors() { return GetDefaultCursorsFromEmbedded(); }
 

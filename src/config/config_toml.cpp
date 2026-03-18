@@ -784,6 +784,93 @@ void WindowOverlayConfigFromToml(const toml::table& tbl, WindowOverlayConfig& cf
     if (auto t = GetTable(tbl, "border")) { BorderConfigFromToml(*t, cfg.border); }
 }
 
+void BrowserOverlayConfigToToml(const BrowserOverlayConfig& cfg, toml::table& out) {
+    out.insert("name", cfg.name);
+    out.insert("url", cfg.url);
+    out.insert("customCss", cfg.customCss);
+    out.insert("browserWidth", cfg.browserWidth);
+    out.insert("browserHeight", cfg.browserHeight);
+    out.insert("x", cfg.x);
+    out.insert("y", cfg.y);
+    out.insert("scale", cfg.scale);
+    out.insert("relativeTo", cfg.relativeTo);
+    out.insert("crop_top", cfg.crop_top);
+    out.insert("crop_bottom", cfg.crop_bottom);
+    out.insert("crop_left", cfg.crop_left);
+    out.insert("crop_right", cfg.crop_right);
+    out.insert("highPerformanceMode", cfg.highPerformanceMode);
+    out.insert("enableColorKey", cfg.enableColorKey);
+
+    toml::array colorKeysArr;
+    for (const auto& ck : cfg.colorKeys) {
+        toml::table ckTbl;
+        ColorKeyConfigToToml(ck, ckTbl);
+        colorKeysArr.push_back(ckTbl);
+    }
+    out.insert("colorKeys", colorKeysArr);
+
+    out.insert("opacity", cfg.opacity);
+
+    toml::table bgTbl;
+    ImageBackgroundConfigToToml(cfg.background, bgTbl);
+    out.insert("background", bgTbl);
+
+    out.insert("pixelatedScaling", cfg.pixelatedScaling);
+    out.insert("onlyOnMyScreen", cfg.onlyOnMyScreen);
+    out.insert("fps", cfg.fps);
+    out.insert("transparentBackground", cfg.transparentBackground);
+    out.insert("muteAudio", cfg.muteAudio);
+    out.insert("reloadOnUpdate", cfg.reloadOnUpdate);
+    out.insert("reloadInterval", cfg.reloadInterval);
+
+    toml::table borderTbl;
+    BorderConfigToToml(cfg.border, borderTbl);
+    out.insert("border", borderTbl);
+}
+
+void BrowserOverlayConfigFromToml(const toml::table& tbl, BrowserOverlayConfig& cfg) {
+    cfg.name = GetStringOr(tbl, "name", "");
+    cfg.url = GetStringOr(tbl, "url", "https://example.com");
+    cfg.customCss = GetStringOr(tbl, "customCss", ConfigDefaults::BROWSER_OVERLAY_CUSTOM_CSS);
+    cfg.browserWidth = GetOr(tbl, "browserWidth", ConfigDefaults::BROWSER_OVERLAY_WIDTH);
+    cfg.browserHeight = GetOr(tbl, "browserHeight", ConfigDefaults::BROWSER_OVERLAY_HEIGHT);
+    cfg.x = GetOr(tbl, "x", ConfigDefaults::IMAGE_X);
+    cfg.y = GetOr(tbl, "y", ConfigDefaults::IMAGE_Y);
+    cfg.scale = GetOr(tbl, "scale", ConfigDefaults::IMAGE_SCALE);
+    cfg.relativeTo = GetStringOr(tbl, "relativeTo", ConfigDefaults::IMAGE_RELATIVE_TO);
+    cfg.crop_top = GetOr(tbl, "crop_top", ConfigDefaults::IMAGE_CROP_TOP);
+    cfg.crop_bottom = GetOr(tbl, "crop_bottom", ConfigDefaults::IMAGE_CROP_BOTTOM);
+    cfg.crop_left = GetOr(tbl, "crop_left", ConfigDefaults::IMAGE_CROP_LEFT);
+    cfg.crop_right = GetOr(tbl, "crop_right", ConfigDefaults::IMAGE_CROP_RIGHT);
+    cfg.highPerformanceMode = GetOr(tbl, "highPerformanceMode", ConfigDefaults::BROWSER_OVERLAY_HIGH_PERFORMANCE_MODE);
+    cfg.enableColorKey = GetOr(tbl, "enableColorKey", ConfigDefaults::BROWSER_OVERLAY_ENABLE_COLOR_KEY);
+
+    cfg.colorKeys.clear();
+    if (auto arr = GetArray(tbl, "colorKeys")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                ColorKeyConfig ck;
+                ColorKeyConfigFromToml(*t, ck);
+                cfg.colorKeys.push_back(ck);
+            }
+        }
+    }
+
+    cfg.opacity = GetOr(tbl, "opacity", ConfigDefaults::IMAGE_OPACITY);
+
+    if (auto t = GetTable(tbl, "background")) { ImageBackgroundConfigFromToml(*t, cfg.background); }
+
+    cfg.pixelatedScaling = GetOr(tbl, "pixelatedScaling", ConfigDefaults::IMAGE_PIXELATED_SCALING);
+    cfg.onlyOnMyScreen = GetOr(tbl, "onlyOnMyScreen", ConfigDefaults::IMAGE_ONLY_ON_MY_SCREEN);
+    cfg.fps = GetOr(tbl, "fps", ConfigDefaults::BROWSER_OVERLAY_FPS);
+    cfg.transparentBackground = GetOr(tbl, "transparentBackground", ConfigDefaults::BROWSER_OVERLAY_TRANSPARENT_BACKGROUND);
+    cfg.muteAudio = GetOr(tbl, "muteAudio", ConfigDefaults::BROWSER_OVERLAY_MUTE_AUDIO);
+    cfg.reloadOnUpdate = GetOr(tbl, "reloadOnUpdate", ConfigDefaults::BROWSER_OVERLAY_RELOAD_ON_UPDATE);
+    cfg.reloadInterval = GetOr(tbl, "reloadInterval", ConfigDefaults::BROWSER_OVERLAY_RELOAD_INTERVAL);
+
+    if (auto t = GetTable(tbl, "border")) { BorderConfigFromToml(*t, cfg.border); }
+}
+
 void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     out.insert("id", cfg.id);
 
@@ -831,6 +918,10 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     toml::array windowOverlayIds;
     for (const auto& id : cfg.windowOverlayIds) { windowOverlayIds.push_back(id); }
     out.insert("windowOverlayIds", windowOverlayIds);
+
+    toml::array browserOverlayIds;
+    for (const auto& id : cfg.browserOverlayIds) { browserOverlayIds.push_back(id); }
+    out.insert("browserOverlayIds", browserOverlayIds);
 
     toml::table stretchTbl;
     StretchConfigToToml(cfg.stretch, stretchTbl);
@@ -957,6 +1048,13 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
     if (auto arr = GetArray(tbl, "windowOverlayIds")) {
         for (const auto& elem : *arr) {
             if (auto val = elem.value<std::string>()) { cfg.windowOverlayIds.push_back(*val); }
+        }
+    }
+
+    cfg.browserOverlayIds.clear();
+    if (auto arr = GetArray(tbl, "browserOverlayIds")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<std::string>()) { cfg.browserOverlayIds.push_back(*val); }
         }
     }
 
@@ -1656,6 +1754,14 @@ void ConfigToToml(const Config& config, toml::table& out) {
     }
     out.insert("windowOverlay", windowOverlaysArr);
 
+    toml::array browserOverlaysArr;
+    for (const auto& overlay : config.browserOverlays) {
+        toml::table overlayTbl;
+        BrowserOverlayConfigToToml(overlay, overlayTbl);
+        browserOverlaysArr.push_back(overlayTbl);
+    }
+    out.insert("browserOverlay", browserOverlaysArr);
+
     toml::array hotkeysArr;
     for (const auto& hotkey : config.hotkeys) {
         toml::table hotkeyTbl;
@@ -1801,6 +1907,17 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
 
+    config.browserOverlays.clear();
+    if (auto arr = GetArray(tbl, "browserOverlay")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                BrowserOverlayConfig overlay;
+                BrowserOverlayConfigFromToml(*t, overlay);
+                config.browserOverlays.push_back(overlay);
+            }
+        }
+    }
+
     config.hotkeys.clear();
     if (auto arr = GetArray(tbl, "hotkey")) {
         for (const auto& elem : *arr) {
@@ -1865,6 +1982,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "mirrorGroup",
                                                  "image",
                                                  "windowOverlay",
+                                                 "browserOverlay",
                                                  "hotkey",
                                                  "sensitivityHotkey" };
 
@@ -1879,6 +1997,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                               "mirrorGroupIds",
                                               "imageIds",
                                               "windowOverlayIds",
+                                              "browserOverlayIds",
                                               "stretch",
                                               "gameTransition",
                                               "overlayTransition",
@@ -1932,6 +2051,32 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                        "forceUpdate",
                                                        "enableInteraction",
                                                        "border" };
+                                std::vector<std::string> browserOverlayKeys = { "name",
+                                                        "url",
+                                                        "customCss",
+                                                        "browserWidth",
+                                                        "browserHeight",
+                                                        "x",
+                                                        "y",
+                                                        "scale",
+                                                        "relativeTo",
+                                                        "crop_top",
+                                                        "crop_bottom",
+                                                        "crop_left",
+                                                        "crop_right",
+                                                        "highPerformanceMode",
+                                                        "enableColorKey",
+                                                        "colorKeys",
+                                                        "opacity",
+                                                        "background",
+                                                        "pixelatedScaling",
+                                                        "onlyOnMyScreen",
+                                                        "fps",
+                                                        "transparentBackground",
+                                                        "muteAudio",
+                                                        "reloadOnUpdate",
+                                                        "reloadInterval",
+                                                        "border" };
         std::vector<std::string> hotkeyKeys = { "keys", "mainMode", "secondaryMode", "altSecondaryModes", "conditions", "debounce" };
 
         auto getKeyOrder = [&](const std::string& arrayKey) -> const std::vector<std::string>* {
@@ -1940,6 +2085,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
             if (arrayKey == "mirrorGroup") return &mirrorGroupKeys;
             if (arrayKey == "image") return &imageKeys;
             if (arrayKey == "windowOverlay") return &windowOverlayKeys;
+            if (arrayKey == "browserOverlay") return &browserOverlayKeys;
             if (arrayKey == "hotkey") return &hotkeyKeys;
             return nullptr;
         };

@@ -24,6 +24,38 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
     SliderCtrlClickTip();
 
+    auto renderModeBrowserOverlayAssignments = [&](ModeConfig& mode, const std::string& idSuffix) {
+        if (ImGui::TreeNode((tr("modes.browser_overlays") + "##" + idSuffix).c_str())) {
+            int browserOverlayIdxToRemove = -1;
+            for (size_t k = 0; k < mode.browserOverlayIds.size(); ++k) {
+                ImGui::PushID(("browser_overlay_" + idSuffix + "_" + std::to_string(k)).c_str());
+                std::string deleteLabel = "X##del_browser_overlay_from_mode_" + idSuffix + "_" + std::to_string(k);
+                if (ImGui::Button(deleteLabel.c_str())) { browserOverlayIdxToRemove = static_cast<int>(k); }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(mode.browserOverlayIds[k].c_str());
+                ImGui::PopID();
+            }
+            if (browserOverlayIdxToRemove != -1) {
+                mode.browserOverlayIds.erase(mode.browserOverlayIds.begin() + browserOverlayIdxToRemove);
+                g_configIsDirty = true;
+            }
+            if (ImGui::BeginCombo((tr("modes.add_browser_overlay") + "##add_browser_overlay_to_mode_" + idSuffix).c_str(),
+                                  trc("modes.select_browser_overlay"))) {
+                for (const auto& overlayConf : g_config.browserOverlays) {
+                    if (std::find(mode.browserOverlayIds.begin(), mode.browserOverlayIds.end(), overlayConf.name) ==
+                        mode.browserOverlayIds.end()) {
+                        if (ImGui::Selectable(overlayConf.name.c_str())) {
+                            mode.browserOverlayIds.push_back(overlayConf.name);
+                            g_configIsDirty = true;
+                        }
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TreePop();
+        }
+    };
+
     ImGui::SeparatorText(trc("modes.status.default_modes"));
 
     for (size_t i = 0; i < g_config.modes.size(); ++i) {
@@ -287,6 +319,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     }
                     ImGui::TreePop();
                 }
+
+                renderModeBrowserOverlayAssignments(mode, mode.id);
 
 
                 if (ImGui::TreeNode((tr("modes.sensitivity_override") + "##Fullscreen").c_str())) {
@@ -1440,6 +1474,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
+                renderModeBrowserOverlayAssignments(mode, mode.id);
+
                 if (ImGui::TreeNode((tr("modes.sensitivity_override") + "##Preemptive").c_str())) {
                     if (ImGui::Checkbox((tr("modes.override_sensitivity") + "##Preemptive").c_str(), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
@@ -1870,6 +1906,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+
+                renderModeBrowserOverlayAssignments(mode, mode.id);
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
 
                     if (mode.sensitivityOverrideEnabled) {
@@ -2285,6 +2323,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+
+                renderModeBrowserOverlayAssignments(mode, mode.id);
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
 
                     if (mode.sensitivityOverrideEnabled) {
@@ -2806,6 +2846,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     }
                     ImGui::TreePop();
                 }
+
+                renderModeBrowserOverlayAssignments(mode, mode.id);
 
                 if (ImGui::TreeNode("Stretch Properties")) {
                     ImGui::TextDisabled("Fullscreen stretch is always enabled and fills the game window.");

@@ -241,7 +241,8 @@ void RenderImages(const std::vector<ImageConfig>& activeImages, int fullW, int f
                   bool excludeOnlyOnMyScreen = false);
 void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
-                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays);
+                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays,
+                                  std::vector<const BrowserOverlayConfig*>& outBrowserOverlays);
 void RenderMode(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, bool skipAnimation = false,
                 bool excludeOnlyOnMyScreen = false);
 bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH,

@@ -732,6 +732,13 @@ bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex)
     return false;
 }
 
+bool HasDuplicateBrowserOverlayName(const std::string& name, size_t currentIndex) {
+    for (size_t i = 0; i < g_config.browserOverlays.size(); i++) {
+        if (i != currentIndex && g_config.browserOverlays[i].name == name) { return true; }
+    }
+    return false;
+}
+
 bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex) {
     for (size_t i = 0; i < g_config.eyezoom.overlays.size(); i++) {
         if (i != currentIndex && g_config.eyezoom.overlays[i].name == name) { return true; }

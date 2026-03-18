@@ -248,6 +248,30 @@ struct WindowOverlayConfig {
     bool enableInteraction = false;
     BorderConfig border;
 };
+struct BrowserOverlayConfig {
+    std::string name;
+    std::string url = "https://example.com";
+    std::string customCss;
+    int browserWidth = 1280;
+    int browserHeight = 720;
+    int x = 0, y = 0;
+    float scale = 1.0f;
+    std::string relativeTo = "topLeftScreen";
+    int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
+    bool highPerformanceMode = false;
+    bool enableColorKey = false;
+    std::vector<ColorKeyConfig> colorKeys;
+    float opacity = 1.0f;
+    ImageBackgroundConfig background;
+    bool pixelatedScaling = false;
+    bool onlyOnMyScreen = false;
+    int fps = 15;
+    bool transparentBackground = false;
+    bool muteAudio = true;
+    bool reloadOnUpdate = false;
+    int reloadInterval = 0;
+    BorderConfig border;
+};
 
 enum class GameTransitionType {
     Cut,
@@ -282,6 +306,7 @@ struct ModeConfig {
     std::vector<std::string> mirrorGroupIds;
     std::vector<std::string> imageIds;
     std::vector<std::string> windowOverlayIds;
+    std::vector<std::string> browserOverlayIds;
     StretchConfig stretch;
 
     GameTransitionType gameTransition = GameTransitionType::Bounce;
@@ -449,6 +474,7 @@ struct Config {
     std::vector<MirrorGroupConfig> mirrorGroups;
     std::vector<ImageConfig> images;
     std::vector<WindowOverlayConfig> windowOverlays;
+    std::vector<BrowserOverlayConfig> browserOverlays;
     std::vector<ModeConfig> modes;
     std::vector<HotkeyConfig> hotkeys;
     std::vector<SensitivityHotkeyConfig> sensitivityHotkeys;
@@ -574,6 +600,7 @@ extern std::atomic<bool> g_showGui;
 extern std::atomic<bool> g_wasCursorVisible;
 extern std::atomic<bool> g_imageOverlaysVisible;
 extern std::atomic<bool> g_windowOverlaysVisible;
+extern std::atomic<bool> g_browserOverlaysVisible;
 extern std::string g_currentlyEditingMirror;
 extern std::atomic<HWND> g_minecraftHwnd;
 extern std::wstring g_toolscreenPath;

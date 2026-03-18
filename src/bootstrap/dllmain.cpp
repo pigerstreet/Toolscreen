@@ -12,6 +12,7 @@
 #include "hooks/hook_chain.h"
 #include "common/utils.h"
 #include "version.h"
+#include "features/browser_overlay.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
 
@@ -127,6 +128,7 @@ std::atomic<bool> g_cursorsNeedReload{ false };
 std::atomic<bool> g_showGui{ false };
 std::atomic<bool> g_imageOverlaysVisible{ true };
 std::atomic<bool> g_windowOverlaysVisible{ true };
+std::atomic<bool> g_browserOverlaysVisible{ true };
 std::string g_currentlyEditingMirror;
 std::atomic<HWND> g_minecraftHwnd{ NULL };
 std::wstring g_toolscreenPath;
@@ -1922,7 +1924,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             const bool anyModeOverlaysConfigured =
                 (!modeToRenderCopy.mirrorIds.empty() || !modeToRenderCopy.mirrorGroupIds.empty() ||
                  (g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.imageIds.empty()) ||
-                 (g_windowOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.windowOverlayIds.empty()));
+                 (g_windowOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.windowOverlayIds.empty()) ||
+                 (g_browserOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.browserOverlayIds.empty()));
 
             const bool anyImGuiOrDebugOverlay = shouldRenderGui || showPerformanceOverlay || showProfiler || showEyeZoomOnScreen ||
                                                 frameCfg.debug.showTextureGrid;
@@ -2345,6 +2348,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         g_imageMonitorThread = std::thread([]() { ImageMonitorThread(nullptr); });
 
         StartWindowCaptureThread();
+        StartBrowserOverlayThread();
 
         if (MH_Initialize() != MH_OK) {
             Log("ERROR: MH_Initialize() failed!");
@@ -2459,6 +2463,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         if (g_hookCompatThread.joinable()) { g_hookCompatThread.join(); }
 
         // Stop background threads
+        StopBrowserOverlayThread();
         StopWindowCaptureThread();
 
         Log("Background threads stopped.");

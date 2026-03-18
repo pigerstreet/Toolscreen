@@ -75,6 +75,7 @@ bool HasDuplicateModeName(const std::string& name, size_t currentIndex);
 bool HasDuplicateMirrorName(const std::string& name, size_t currentIndex);
 bool HasDuplicateImageName(const std::string& name, size_t currentIndex);
 bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex);
+bool HasDuplicateBrowserOverlayName(const std::string& name, size_t currentIndex);
 bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex);
 EyeZoomConfig GetDefaultEyeZoomConfig();
 
@@ -89,6 +90,7 @@ std::vector<MirrorConfig> GetDefaultMirrors();
 std::vector<MirrorGroupConfig> GetDefaultMirrorGroups();
 std::vector<ImageConfig> GetDefaultImages();
 std::vector<WindowOverlayConfig> GetDefaultWindowOverlays();
+std::vector<BrowserOverlayConfig> GetDefaultBrowserOverlays();
 std::vector<HotkeyConfig> GetDefaultHotkeys();
 CursorsConfig GetDefaultCursors();
 bool HasDuplicateMirrorGroupName(const std::string& name, size_t currentIndex);

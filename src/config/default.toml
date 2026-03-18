@@ -312,6 +312,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = true, height = 1440, width = 2560, x = 0, y = 0 }
 width = 2560
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -353,6 +354,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 384
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -394,6 +396,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 384
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -435,6 +438,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 'max(330, roundEven(screenWidth / 8))'
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -476,6 +480,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = "roundEven(screenWidth * 0.98)"
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]

@@ -8,6 +8,7 @@
 #include "gui/imgui_input_queue.h"
 #include "third_party/stb_image.h"
 #include "common/utils.h"
+#include "features/browser_overlay.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
 #include "imgui_impl_opengl3.h"
@@ -25,6 +26,7 @@
 static std::unordered_map<std::string, size_t> s_mirrorLookupCache;
 static std::unordered_map<std::string, size_t> s_imageLookupCache;
 static std::unordered_map<std::string, size_t> s_windowOverlayLookupCache;
+static std::unordered_map<std::string, size_t> s_browserOverlayLookupCache;
 static std::atomic<uint64_t> s_configCacheVersion{ 0 };
 static uint64_t s_lastCacheRebuildVersion = 0;
 static std::mutex s_lookupCacheMutex;
@@ -42,6 +44,7 @@ static void RebuildConfigLookupCaches() {
     s_mirrorLookupCache.clear();
     s_imageLookupCache.clear();
     s_windowOverlayLookupCache.clear();
+    s_browserOverlayLookupCache.clear();
 
     s_mirrorLookupCache.reserve(g_config.mirrors.size());
     for (size_t i = 0; i < g_config.mirrors.size(); ++i) { s_mirrorLookupCache[g_config.mirrors[i].name] = i; }
@@ -51,6 +54,9 @@ static void RebuildConfigLookupCaches() {
 
     s_windowOverlayLookupCache.reserve(g_config.windowOverlays.size());
     for (size_t i = 0; i < g_config.windowOverlays.size(); ++i) { s_windowOverlayLookupCache[g_config.windowOverlays[i].name] = i; }
+
+    s_browserOverlayLookupCache.reserve(g_config.browserOverlays.size());
+    for (size_t i = 0; i < g_config.browserOverlays.size(); ++i) { s_browserOverlayLookupCache[g_config.browserOverlays[i].name] = i; }
 }
 
 void InvalidateConfigLookupCaches() { s_configCacheVersion.fetch_add(1, std::memory_order_release); }
@@ -74,10 +80,12 @@ static void EnsureConfigCachesValid() {
 
 void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
-                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays) {
+                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays,
+                                  std::vector<const BrowserOverlayConfig*>& outBrowserOverlays) {
     outMirrors.clear();
     outImages.clear();
     outWindowOverlays.clear();
+    outBrowserOverlays.clear();
 
     static uint64_t s_cachedConfigVersion = 0;
     static std::unordered_map<std::string, const ModeConfig*> s_modeById;
@@ -86,6 +94,7 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
     static std::unordered_map<std::string, const ImageConfig*> s_imageByName;
     static std::unordered_map<std::string, const WindowOverlayConfig*> s_windowOverlayByName;
+    static std::unordered_map<std::string, const BrowserOverlayConfig*> s_browserOverlayByName;
 
     if (s_cachedConfigVersion != configVersion) {
         s_cachedConfigVersion = configVersion;
@@ -95,6 +104,7 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
         s_groupByName.clear();
         s_imageByName.clear();
         s_windowOverlayByName.clear();
+        s_browserOverlayByName.clear();
 
         s_modeById.reserve(config.modes.size());
         s_modeByIdLowered.reserve(config.modes.size());
@@ -114,6 +124,9 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
 
         s_windowOverlayByName.reserve(config.windowOverlays.size());
         for (const auto& overlay : config.windowOverlays) { s_windowOverlayByName[overlay.name] = &overlay; }
+
+        s_browserOverlayByName.reserve(config.browserOverlays.size());
+        for (const auto& overlay : config.browserOverlays) { s_browserOverlayByName[overlay.name] = &overlay; }
     }
 
     const ModeConfig* mode = nullptr;
@@ -130,6 +143,7 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     outMirrors.reserve(mode->mirrorIds.size() + mode->mirrorGroupIds.size());
     outImages.reserve(mode->imageIds.size());
     outWindowOverlays.reserve(mode->windowOverlayIds.size());
+    outBrowserOverlays.reserve(mode->browserOverlayIds.size());
 
     for (const auto& mirrorName : mode->mirrorIds) {
         auto it = s_mirrorByName.find(mirrorName);
@@ -195,6 +209,15 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
             if (it == s_windowOverlayByName.end() || !it->second) continue;
             const WindowOverlayConfig& overlay = *it->second;
             if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outWindowOverlays.push_back(it->second); }
+        }
+    }
+
+    if (g_browserOverlaysVisible.load(std::memory_order_acquire)) {
+        for (const auto& overlayId : mode->browserOverlayIds) {
+            auto it = s_browserOverlayByName.find(overlayId);
+            if (it == s_browserOverlayByName.end() || !it->second) continue;
+            const BrowserOverlayConfig& overlay = *it->second;
+            if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outBrowserOverlays.push_back(it->second); }
         }
     }
 }
@@ -2583,8 +2606,10 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     if (!fromModeId.empty() && (isAnimating || fromSlideMirrorsIn || toSlideMirrorsIn || cfg.eyezoom.slideMirrorsIn)) {
         std::vector<ImageConfig> unusedImages;
         std::vector<const WindowOverlayConfig*> unusedWindowOverlays;
+        std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
         const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
-        CollectActiveElementsForMode(cfg, fromModeId, false, cfgVersion, sourceMirrors, unusedImages, unusedWindowOverlays);
+        CollectActiveElementsForMode(cfg, fromModeId, false, cfgVersion, sourceMirrors, unusedImages, unusedWindowOverlays,
+                                     unusedBrowserOverlays);
         sourceMirrorConfigs.reserve(sourceMirrors.size());
         for (const auto& sourceMirror : sourceMirrors) {
             sourceMirrorConfigs[sourceMirror.name] = &sourceMirror;
@@ -3344,6 +3369,126 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
     glDisable(GL_BLEND);
 }
 
+static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayConfig*>& overlays, int fullW, int fullH, int gameX,
+                                        int gameY, int gameW, int gameH, int gameResW, int gameResH, bool relativeStretching,
+                                        float transitionProgress, int fromX, int fromY, int fromW, int fromH, float modeOpacity,
+                                        bool excludeOnlyOnMyScreen) {
+    if (overlays.empty()) return;
+
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glActiveTexture(GL_TEXTURE0);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    glUseProgram(g_imageRenderProgram);
+    glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
+
+    for (const BrowserOverlayConfig* conf : overlays) {
+        if (!conf) continue;
+        if (excludeOnlyOnMyScreen && conf->onlyOnMyScreen) continue;
+
+        const float effectiveOpacity = conf->opacity * modeOpacity;
+        const bool hasBg = conf->background.enabled && conf->background.opacity > 0.0f;
+        const bool hasBorder = conf->border.enabled && conf->border.width > 0;
+        if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) continue;
+
+        BrowserOverlayTextureFrame frame{};
+        if (!PrepareBrowserOverlayTexture(*conf, frame)) continue;
+
+        int croppedW = frame.textureWidth - conf->crop_left - conf->crop_right;
+        int croppedH = frame.textureHeight - conf->crop_top - conf->crop_bottom;
+        croppedW = (std::max)(1, croppedW);
+        croppedH = (std::max)(1, croppedH);
+        int displayW = (std::max)(1, static_cast<int>(croppedW * conf->scale));
+        int displayH = (std::max)(1, static_cast<int>(croppedH * conf->scale));
+
+        bool isViewportRelative = conf->relativeTo.length() > 8 && conf->relativeTo.substr(conf->relativeTo.length() - 8) == "Viewport";
+        int screenX = 0;
+        int screenY = 0;
+        if (isViewportRelative) {
+            float toScaleX = (gameW > 0 && gameResW > 0) ? static_cast<float>(gameW) / gameResW : 1.0f;
+            float toScaleY = (gameH > 0 && gameResH > 0) ? static_cast<float>(gameH) / gameResH : 1.0f;
+            float fromScaleX = (fromW > 0 && gameResW > 0) ? static_cast<float>(fromW) / gameResW : toScaleX;
+            float fromScaleY = (fromH > 0 && gameResH > 0) ? static_cast<float>(fromH) / gameResH : toScaleY;
+            int toDisplayW = relativeStretching ? static_cast<int>(displayW * toScaleX) : displayW;
+            int toDisplayH = relativeStretching ? static_cast<int>(displayH * toScaleY) : displayH;
+            int fromDisplayW = relativeStretching ? static_cast<int>(displayW * fromScaleX) : displayW;
+            int fromDisplayH = relativeStretching ? static_cast<int>(displayH * fromScaleY) : displayH;
+            int toPosX = 0;
+            int toPosY = 0;
+            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, toDisplayW, toDisplayH, gameX, gameY, gameW,
+                                                  gameH, fullW, fullH, toPosX, toPosY);
+            int fromPosX = 0;
+            int fromPosY = 0;
+            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, fromDisplayW, fromDisplayH, fromX, fromY, fromW,
+                                                  fromH, fullW, fullH, fromPosX, fromPosY);
+            float t = transitionProgress;
+            screenX = static_cast<int>(fromPosX + (toPosX - fromPosX) * t);
+            screenY = static_cast<int>(fromPosY + (toPosY - fromPosY) * t);
+            if (relativeStretching) {
+                displayW = static_cast<int>(fromDisplayW + (toDisplayW - fromDisplayW) * t);
+                displayH = static_cast<int>(fromDisplayH + (toDisplayH - fromDisplayH) * t);
+            }
+        } else {
+            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, displayW, displayH, gameX, gameY, gameW, gameH,
+                                                  fullW, fullH, screenX, screenY);
+        }
+
+        int screenYGl = fullH - screenY - displayH;
+        float nx1 = (static_cast<float>(screenX) / fullW) * 2.0f - 1.0f;
+        float ny1 = (static_cast<float>(screenYGl) / fullH) * 2.0f - 1.0f;
+        float nx2 = (static_cast<float>(screenX + displayW) / fullW) * 2.0f - 1.0f;
+        float ny2 = (static_cast<float>(screenYGl + displayH) / fullH) * 2.0f - 1.0f;
+
+        if (hasBg) {
+            glUseProgram(g_solidColorProgram);
+            glUniform4f(g_solidColorShaderLocs.color, conf->background.color.r, conf->background.color.g, conf->background.color.b,
+                        conf->background.opacity * modeOpacity);
+            float bgVerts[] = { nx1, ny1, 0, 0, nx2, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny2, 0, 0 };
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        glUseProgram(g_imageRenderProgram);
+        BindTextureDirect(GL_TEXTURE_2D, frame.textureId);
+        const bool hasColorKeys = conf->enableColorKey && !conf->colorKeys.empty();
+        glUniform1i(g_imageRenderShaderLocs.enableColorKey, hasColorKeys ? 1 : 0);
+        if (hasColorKeys) {
+            int numKeys = (std::min)(static_cast<int>(conf->colorKeys.size()), ConfigDefaults::MAX_COLOR_KEYS);
+            float colors[ConfigDefaults::MAX_COLOR_KEYS * 3] = {};
+            float sensitivities[ConfigDefaults::MAX_COLOR_KEYS] = {};
+            for (int i = 0; i < numKeys; ++i) {
+                colors[i * 3 + 0] = conf->colorKeys[i].color.r;
+                colors[i * 3 + 1] = conf->colorKeys[i].color.g;
+                colors[i * 3 + 2] = conf->colorKeys[i].color.b;
+                sensitivities[i] = conf->colorKeys[i].sensitivity;
+            }
+            glUniform1i(g_imageRenderShaderLocs.numColorKeys, numKeys);
+            glUniform3fv(g_imageRenderShaderLocs.colorKeys, numKeys, colors);
+            glUniform1fv(g_imageRenderShaderLocs.sensitivities, numKeys, sensitivities);
+        }
+        glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOpacity);
+        float tu1 = static_cast<float>(conf->crop_left) / frame.textureWidth;
+        float tv1 = static_cast<float>(conf->crop_top) / frame.textureHeight;
+        float tu2 = static_cast<float>(frame.textureWidth - conf->crop_right) / frame.textureWidth;
+        float tv2 = static_cast<float>(frame.textureHeight - conf->crop_bottom) / frame.textureHeight;
+        float verts[] = { nx1, ny1, tu1, tv2, nx2, ny1, tu2, tv2, nx2, ny2, tu2, tv1,
+                          nx1, ny1, tu1, tv2, nx2, ny2, tu2, tv1, nx1, ny2, tu1, tv1 };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
+
+        if (hasBorder) {
+            RenderGameBorder(screenX, screenY, displayW, displayH, conf->border.width, conf->border.radius, conf->border.color, fullW,
+                             fullH);
+        }
+    }
+
+    glDisable(GL_BLEND);
+}
+
 struct SameThreadOverlayState {
     int fullW = 0;
     int fullH = 0;
@@ -3395,6 +3540,7 @@ struct SameThreadOverlayState {
     bool modeHasMirrors = false;
     bool modeHasImages = false;
     bool modeHasWindowOverlays = false;
+    bool modeHasBrowserOverlays = false;
 
     bool isRawWindowedMode = false;
     std::string fromModeId;
@@ -3422,7 +3568,8 @@ static SameThreadMirrorCaptureReuseState s_sameThreadMirrorCaptureReuseState;
 static uint64_t s_sameThreadMirrorCaptureFrameTag = 0;
 
 static bool HasSameThreadOverlayWork(const SameThreadOverlayState& request, const Config& cfg) {
-    if (request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays || request.shouldRenderGui ||
+    if (request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays || request.modeHasBrowserOverlays ||
+        request.shouldRenderGui ||
         request.showPerformanceOverlay || request.showProfiler || request.showTextureGrid || request.showEyeZoom ||
         request.showWelcomeToast) {
         return true;
@@ -3526,9 +3673,11 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     static std::string s_cachedActiveModeId;
     static bool s_cachedActiveImagesVisible = false;
     static bool s_cachedActiveWindowOverlaysVisible = false;
+    static bool s_cachedActiveBrowserOverlaysVisible = false;
     static std::vector<MirrorConfig> s_cachedActiveMirrors;
     static std::vector<ImageConfig> s_cachedActiveImages;
     static std::vector<const WindowOverlayConfig*> s_cachedActiveWindowOverlays;
+    static std::vector<const BrowserOverlayConfig*> s_cachedActiveBrowserOverlays;
     static uint64_t s_cachedEyeZoomSlideOutConfigVersion = 0;
     static std::string s_cachedEyeZoomSlideOutTargetModeId;
     static std::vector<MirrorConfig> s_cachedEyeZoomSlideOutMirrors;
@@ -3542,6 +3691,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     static const std::vector<MirrorConfig> s_emptyMirrors;
     static const std::vector<ImageConfig> s_emptyImages;
     static const std::vector<const WindowOverlayConfig*> s_emptyWindowOverlays;
+    static const std::vector<const BrowserOverlayConfig*> s_emptyBrowserOverlays;
 
     GameViewportGeometry geo{};
     geo.gameW = request.gameW;
@@ -3557,26 +3707,32 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                                        ((request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) ||
                                         (!request.isTransitioningFromEyeZoom && request.fromSlideMirrorsIn && !request.fromModeId.empty() &&
                                          request.mirrorSlideProgress < 1.0f && !request.skipAnimation));
-    const bool needModeElements = request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays || hasMirrorSlideOutWork;
+    const bool needModeElements = request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays ||
+                                  request.modeHasBrowserOverlays || hasMirrorSlideOutWork;
     const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
     const bool imagesVisible = request.modeHasImages;
     const bool windowOverlaysVisible = request.modeHasWindowOverlays;
+    const bool browserOverlaysVisible = request.modeHasBrowserOverlays;
     if (needModeElements) {
         if (s_cachedActiveConfigVersion != cfgVersion || s_cachedActiveModeId != request.modeId ||
-            s_cachedActiveImagesVisible != imagesVisible || s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible) {
+            s_cachedActiveImagesVisible != imagesVisible || s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible ||
+            s_cachedActiveBrowserOverlaysVisible != browserOverlaysVisible) {
             PROFILE_SCOPE_CAT("Collect Active Mode Elements", "Rendering");
             s_cachedActiveConfigVersion = cfgVersion;
             s_cachedActiveModeId = request.modeId;
             s_cachedActiveImagesVisible = imagesVisible;
             s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
+            s_cachedActiveBrowserOverlaysVisible = browserOverlaysVisible;
             CollectActiveElementsForMode(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
-                                         s_cachedActiveWindowOverlays);
+                                         s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays);
         }
     }
     const std::vector<MirrorConfig>& activeMirrors = needModeElements ? s_cachedActiveMirrors : s_emptyMirrors;
     const std::vector<ImageConfig>& activeImages = needModeElements ? s_cachedActiveImages : s_emptyImages;
     const std::vector<const WindowOverlayConfig*>& activeWindowOverlays =
         needModeElements ? s_cachedActiveWindowOverlays : s_emptyWindowOverlays;
+    const std::vector<const BrowserOverlayConfig*>& activeBrowserOverlays =
+        needModeElements ? s_cachedActiveBrowserOverlays : s_emptyBrowserOverlays;
 
     if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
         if (s_cachedEyeZoomSlideOutConfigVersion != cfgVersion || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
@@ -3584,13 +3740,15 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             std::vector<MirrorConfig> eyeZoomMirrors;
             std::vector<ImageConfig> unusedImages;
             std::vector<const WindowOverlayConfig*> unusedOverlays;
+            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
             std::unordered_set<std::string> activeMirrorNames;
             activeMirrorNames.reserve(activeMirrors.size());
             for (const auto& targetMirror : activeMirrors) {
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays);
+            CollectActiveElementsForMode(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays,
+                                         unusedBrowserOverlays);
 
             s_cachedEyeZoomSlideOutMirrors.clear();
             s_cachedEyeZoomSlideOutMirrors.reserve(eyeZoomMirrors.size());
@@ -3615,13 +3773,15 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             std::vector<MirrorConfig> fromModeMirrors;
             std::vector<ImageConfig> unusedImages;
             std::vector<const WindowOverlayConfig*> unusedOverlays;
+            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
             std::unordered_set<std::string> activeMirrorNames;
             activeMirrorNames.reserve(activeMirrors.size());
             for (const auto& targetMirror : activeMirrors) {
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays);
+            CollectActiveElementsForMode(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays,
+                                         unusedBrowserOverlays);
 
             s_cachedTransitionSlideOutMirrors.clear();
             s_cachedTransitionSlideOutMirrors.reserve(fromModeMirrors.size());
@@ -3738,6 +3898,14 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                                    request.excludeOnlyOnMyScreen);
     }
 
+    if (!activeBrowserOverlays.empty()) {
+        PROFILE_SCOPE_CAT("Render Browser Overlays", "Rendering");
+        RenderBrowserOverlaysDirect(activeBrowserOverlays, request.fullW, request.fullH, request.toX, request.toY, request.toW,
+                                    request.toH, request.gameW, request.gameH, request.relativeStretching,
+                                    request.transitionProgress, request.fromX, request.fromY, request.fromW, request.fromH,
+                                    request.overlayOpacity, request.excludeOnlyOnMyScreen);
+    }
+
     RenderSameThreadImGui(request);
     if (request.showWelcomeToast) {
         PROFILE_SCOPE_CAT("Render Welcome Toast", "Rendering");
@@ -3745,7 +3913,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     }
 
     return !activeMirrors.empty() || !eyeZoomSlideOutMirrors->empty() || !transitionSlideOutMirrors->empty() || !activeImages.empty() ||
-           !activeWindowOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
+            !activeWindowOverlays.empty() || !activeBrowserOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
            request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast;
 }
 
@@ -4401,6 +4569,8 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
             request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
                                             !modeToRender->windowOverlayIds.empty();
+            request.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
+                                             !modeToRender->browserOverlayIds.empty();
             request.isRawWindowedMode = false;
             request.fromModeId = transitionState.fromModeId;
             request.fromSlideMirrorsIn = fromMode && fromMode->slideMirrorsIn;
@@ -5692,6 +5862,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         target.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
         target.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
                                        !modeToRender->windowOverlayIds.empty();
+        target.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
+                        !modeToRender->browserOverlayIds.empty();
 
         target.fromModeId = transitionState.fromModeId;
         if (!transitionState.fromModeId.empty()) {
