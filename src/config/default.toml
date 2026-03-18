@@ -54,8 +54,6 @@ showPerformanceOverlay = false
 showProfiler = false
 showTextureGrid = false
 virtualCameraEnabled = false
-virtualCameraWidth = 1920
-virtualCameraHeight = 1080
 
 [eyezoom]
 centerLineColor = [ 255, 255, 255 ]

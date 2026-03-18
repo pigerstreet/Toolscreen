@@ -106,46 +106,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
         }
     }
 
-    uint32_t virtualCameraMonitorWidth = 0;
-    uint32_t virtualCameraMonitorHeight = 0;
-    GetVirtualCameraMonitorSize(virtualCameraMonitorWidth, virtualCameraMonitorHeight);
-
-    auto clampVirtualCameraDimension = [](int value, uint32_t maxExtent) {
-        if (value <= 0) { return 0; }
-        value = (std::max)(2, value);
-        if (maxExtent > 0) { value = (std::min)(value, static_cast<int>(maxExtent)); }
-        if ((value & 1) != 0) { --value; }
-        return value;
-    };
-
-    int vcWidthSetting = g_config.debug.virtualCameraWidth;
-    int vcHeightSetting = g_config.debug.virtualCameraHeight;
-    ImGui::SetNextItemWidth(160);
-    if (ImGui::InputInt(trc("settings.virtual_camera_width"), &vcWidthSetting, 2, 16)) {
-        g_config.debug.virtualCameraWidth = clampVirtualCameraDimension(vcWidthSetting, virtualCameraMonitorWidth);
-        g_configIsDirty = true;
-
-        if (g_config.debug.virtualCameraEnabled) {
-            uint32_t vcWidth = 0;
-            uint32_t vcHeight = 0;
-            if (GetPreferredVirtualCameraResolution(vcWidth, vcHeight)) {
-                EnsureVirtualCameraSize(vcWidth, vcHeight);
-            }
-        }
-    }
-    ImGui::SetNextItemWidth(160);
-    if (ImGui::InputInt(trc("settings.virtual_camera_height"), &vcHeightSetting, 2, 16)) {
-        g_config.debug.virtualCameraHeight = clampVirtualCameraDimension(vcHeightSetting, virtualCameraMonitorHeight);
-        g_configIsDirty = true;
-
-        if (g_config.debug.virtualCameraEnabled) {
-            uint32_t vcWidth = 0;
-            uint32_t vcHeight = 0;
-            if (GetPreferredVirtualCameraResolution(vcWidth, vcHeight)) {
-                EnsureVirtualCameraSize(vcWidth, vcHeight);
-            }
-        }
-    }
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (!driverInstalled) {
@@ -155,7 +115,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     } else {
         HelpMarker(trc("settings.tooltip.virtual_camera"));
     }
-    HelpMarker(trc("settings.tooltip.virtual_camera_resolution"));
 
     ImGui::Spacing();
 

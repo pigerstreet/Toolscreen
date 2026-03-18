@@ -387,22 +387,12 @@ bool GetPreferredVirtualCameraResolution(uint32_t& outWidth, uint32_t& outHeight
     outWidth = 0;
     outHeight = 0;
 
-    int configuredWidth = 0;
-    int configuredHeight = 0;
-    if (auto cfgSnapshot = GetConfigSnapshot()) {
-        configuredWidth = cfgSnapshot->debug.virtualCameraWidth;
-        configuredHeight = cfgSnapshot->debug.virtualCameraHeight;
-    } else {
-        configuredWidth = g_config.debug.virtualCameraWidth;
-        configuredHeight = g_config.debug.virtualCameraHeight;
-    }
-
     int monitorWidth = 0;
     int monitorHeight = 0;
     ResolveVirtualCameraMonitorSize(monitorWidth, monitorHeight);
 
-    uint32_t width = ResolveVirtualCameraDimension(configuredWidth, monitorWidth);
-    uint32_t height = ResolveVirtualCameraDimension(configuredHeight, monitorHeight);
+    uint32_t width = ResolveVirtualCameraDimension(0, monitorWidth);
+    uint32_t height = ResolveVirtualCameraDimension(0, monitorHeight);
     if (width < 2 || height < 2) { return false; }
 
     outWidth = width;
