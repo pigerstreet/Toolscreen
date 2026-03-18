@@ -811,6 +811,107 @@ bool Spinner(const char* id_label, int* v, int step, int min_val, int max_val, f
     return value_changed;
 }
 
+bool SpinnerDeferredTextInput(const char* id_label, int* v, int step, int min_val, int max_val, float inputWidth, float margin) {
+    ImGui::PushID(id_label);
+    bool value_changed = false;
+    float button_size = ImGui::GetFrameHeight();
+
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    ImGuiID minus_id = ImGui::GetID("-btn");
+    ImGuiID plus_id = ImGui::GetID("+btn");
+    ImGuiID pending_id = ImGui::GetID("pending_value");
+    ImGuiID editing_id = ImGui::GetID("pending_editing");
+
+    const auto clamp_value = [&](int value) {
+        if (value < min_val) value = min_val;
+        if (value > max_val) value = max_val;
+        return value;
+    };
+
+    auto sync_pending_from_committed = [&]() {
+        storage->SetInt(pending_id, *v);
+        storage->SetInt(editing_id, 0);
+    };
+
+    if (storage->GetInt(editing_id, 0) == 0) { storage->SetInt(pending_id, *v); }
+
+    if (ImGui::Button("-", { button_size, button_size })) {
+        *v = clamp_value(*v - step);
+        value_changed = true;
+        sync_pending_from_committed();
+    }
+    if (ImGui::IsItemActive()) {
+        float hold_time = storage->GetFloat(minus_id, 0.0f);
+        hold_time += ImGui::GetIO().DeltaTime;
+        storage->SetFloat(minus_id, hold_time);
+
+        if (hold_time > spinnerHoldDelay) {
+            int repeat_count = (int)((hold_time - spinnerHoldDelay) / spinnerHoldInterval);
+            int last_repeat_count = storage->GetInt(ImGui::GetID("-cnt"), 0);
+            if (repeat_count > last_repeat_count) {
+                *v = clamp_value(*v - step);
+                value_changed = true;
+                sync_pending_from_committed();
+                storage->SetInt(ImGui::GetID("-cnt"), repeat_count);
+            }
+        }
+    } else {
+        storage->SetFloat(minus_id, 0.0f);
+        storage->SetInt(ImGui::GetID("-cnt"), 0);
+    }
+
+    ImGui::SameLine(0, margin);
+    ImGui::SetNextItemWidth(inputWidth);
+    int pending_value = storage->GetInt(pending_id, *v);
+    ImGui::InputInt("##value", &pending_value, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool input_active = ImGui::IsItemActive();
+    const bool input_committed = ImGui::IsItemDeactivatedAfterEdit();
+
+    if (input_committed) {
+        pending_value = clamp_value(pending_value);
+        if (*v != pending_value) {
+            *v = pending_value;
+            value_changed = true;
+        }
+        sync_pending_from_committed();
+    } else if (input_active) {
+        storage->SetInt(pending_id, pending_value);
+        storage->SetInt(editing_id, 1);
+    } else {
+        sync_pending_from_committed();
+    }
+
+    ImGui::SameLine(0, margin);
+
+    if (ImGui::Button("+", { button_size, button_size })) {
+        *v = clamp_value(*v + step);
+        value_changed = true;
+        sync_pending_from_committed();
+    }
+    if (ImGui::IsItemActive()) {
+        float hold_time = storage->GetFloat(plus_id, 0.0f);
+        hold_time += ImGui::GetIO().DeltaTime;
+        storage->SetFloat(plus_id, hold_time);
+
+        if (hold_time > spinnerHoldDelay) {
+            int repeat_count = (int)((hold_time - spinnerHoldDelay) / spinnerHoldInterval);
+            int last_repeat_count = storage->GetInt(ImGui::GetID("+cnt"), 0);
+            if (repeat_count > last_repeat_count) {
+                *v = clamp_value(*v + step);
+                value_changed = true;
+                sync_pending_from_committed();
+                storage->SetInt(ImGui::GetID("+cnt"), repeat_count);
+            }
+        }
+    } else {
+        storage->SetFloat(plus_id, 0.0f);
+        storage->SetInt(ImGui::GetID("+cnt"), 0);
+    }
+
+    ImGui::PopID();
+    return value_changed;
+}
+
 bool SpinnerFloat(const char* id_label, float* v, float step, float min_val, float max_val, const char* format) {
     ImGui::PushID(id_label);
     bool value_changed = false;

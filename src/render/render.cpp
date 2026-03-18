@@ -838,6 +838,32 @@ void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, c
     glDisable(GL_BLEND);
 }
 
+static float GetViewportRelativeImageScale(float scaleX, float scaleY) {
+    if (scaleX > 0.0f && scaleY > 0.0f) {
+        return (std::min)(scaleX, scaleY);
+    }
+    if (scaleX > 0.0f) {
+        return scaleX;
+    }
+    if (scaleY > 0.0f) {
+        return scaleY;
+    }
+    return 1.0f;
+}
+
+static void ScaleViewportRelativeImageSize(int baseW, int baseH, bool relativeStretching, float scaleX, float scaleY, int& outW,
+                                           int& outH) {
+    if (!relativeStretching) {
+        outW = baseW;
+        outH = baseH;
+        return;
+    }
+
+    const float uniformScale = GetViewportRelativeImageScale(scaleX, scaleY);
+    outW = (std::max)(1, static_cast<int>(baseW * uniformScale));
+    outH = (std::max)(1, static_cast<int>(baseH * uniformScale));
+}
+
 void CalculateImageDimensions(const ImageConfig& img, int& outW, int& outH) {
     // NOTE: This is used in UI/drag hit-testing; avoid blocking if another thread is updating textures.
     std::unique_lock<std::mutex> lock(g_userImagesMutex, std::try_to_lock);
@@ -2011,8 +2037,8 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
             inst.height = imgData.frameHeight;
 
             inst.isFullyTransparent = true;
-            int framePixels = imgData.width * imgData.frameHeight;
-            for (int i = 0; i < framePixels; i++) {
+            const size_t totalPixels = static_cast<size_t>(imgData.width) * static_cast<size_t>(imgData.height);
+            for (size_t i = 0; i < totalPixels; ++i) {
                 if (imgData.data[i * 4 + 3] > 0) {
                     inst.isFullyTransparent = false;
                     break;
@@ -2341,6 +2367,42 @@ static void LogInvalidTextureSampleThrottled(const std::string& stage, GLuint te
     LogCategory("texture_ops", "Main Render: Invalid texture sample stage=" + stage + " tex=" + std::to_string(texture) +
                                    " valid=" + std::to_string(valid ? 1 : 0) + " actual=" + std::to_string(actualW) + "x" +
                                    std::to_string(actualH) + expected);
+}
+
+static int GetAnimatedTextureDelayMs(const std::vector<int>& frameDelays, size_t frameIndex) {
+    int delay = 100;
+    if (frameIndex < frameDelays.size() && frameDelays[frameIndex] > 0) {
+        delay = frameDelays[frameIndex];
+    }
+    if (delay < 10) {
+        delay = 100;
+    }
+    return delay;
+}
+
+template <typename TextureInstance>
+static GLuint ResolveAnimatedTextureId(TextureInstance& inst) {
+    if (!inst.isAnimated || inst.frameTextures.empty()) {
+        return inst.textureId;
+    }
+
+    if (inst.currentFrame >= inst.frameTextures.size()) {
+        inst.currentFrame = 0;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - inst.lastFrameTime).count();
+    int delay = GetAnimatedTextureDelayMs(inst.frameDelays, inst.currentFrame);
+
+    while (elapsed >= delay) {
+        elapsed -= delay;
+        inst.currentFrame = (inst.currentFrame + 1) % inst.frameTextures.size();
+        delay = GetAnimatedTextureDelayMs(inst.frameDelays, inst.currentFrame);
+    }
+
+    inst.textureId = inst.frameTextures[inst.currentFrame];
+    inst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
+    return inst.textureId;
 }
 
 struct TextureSampleabilityCacheEntry {
@@ -2997,15 +3059,25 @@ static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int
             auto it = g_userImages.find(conf.name);
             if (it == g_userImages.end() || it->second.textureId == 0) continue;
             UserImageInstance& inst = it->second;
-            texId = inst.textureId;
+            texId = ResolveAnimatedTextureId(inst);
             texWidth = inst.width;
             texHeight = inst.height;
             isFullyTransparent = inst.isFullyTransparent;
 
             if (!inst.filterInitialized || inst.lastPixelatedScaling != conf.pixelatedScaling) {
-                BindTextureDirect(GL_TEXTURE_2D, texId);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR);
+                const GLint minFilter = conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR;
+                const GLint magFilter = conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR;
+                if (inst.isAnimated && !inst.frameTextures.empty()) {
+                    for (GLuint frameTex : inst.frameTextures) {
+                        BindTextureDirect(GL_TEXTURE_2D, frameTex);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter);
+                    }
+                } else {
+                    BindTextureDirect(GL_TEXTURE_2D, texId);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter);
+                }
                 inst.lastPixelatedScaling = conf.pixelatedScaling;
                 inst.filterInitialized = true;
             }
@@ -3031,10 +3103,13 @@ static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int
             float toScaleY = (gameH > 0 && gameResH > 0) ? static_cast<float>(gameH) / gameResH : 1.0f;
             float fromScaleX = (fromW > 0 && gameResW > 0) ? static_cast<float>(fromW) / gameResW : toScaleX;
             float fromScaleY = (fromH > 0 && gameResH > 0) ? static_cast<float>(fromH) / gameResH : toScaleY;
-            int toDisplayW = relativeStretching ? static_cast<int>(displayW * toScaleX) : displayW;
-            int toDisplayH = relativeStretching ? static_cast<int>(displayH * toScaleY) : displayH;
-            int fromDisplayW = relativeStretching ? static_cast<int>(displayW * fromScaleX) : displayW;
-            int fromDisplayH = relativeStretching ? static_cast<int>(displayH * fromScaleY) : displayH;
+            int toDisplayW = displayW;
+            int toDisplayH = displayH;
+            int fromDisplayW = displayW;
+            int fromDisplayH = displayH;
+            ScaleViewportRelativeImageSize(displayW, displayH, relativeStretching, toScaleX, toScaleY, toDisplayW, toDisplayH);
+            ScaleViewportRelativeImageSize(displayW, displayH, relativeStretching, fromScaleX, fromScaleY, fromDisplayW,
+                                           fromDisplayH);
 
             int toPosX = 0;
             int toPosY = 0;
@@ -4004,22 +4079,7 @@ static GLuint ResolveModeBackgroundTextureId(const std::string& modeId) {
     if (bgTexIt == g_backgroundTextures.end()) { return 0; }
 
     BackgroundTextureInstance& bgInst = bgTexIt->second;
-    if (bgInst.isAnimated && !bgInst.frameTextures.empty()) {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bgInst.lastFrameTime).count();
-        int delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
-        if (delay < 10) delay = 100;
-        while (elapsed >= delay) {
-            elapsed -= delay;
-            bgInst.currentFrame = (bgInst.currentFrame + 1) % bgInst.frameTextures.size();
-            delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
-            if (delay < 10) delay = 100;
-        }
-        bgInst.textureId = bgInst.frameTextures[bgInst.currentFrame];
-        bgInst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
-    }
-
-    return bgInst.textureId;
+    return ResolveAnimatedTextureId(bgInst);
 }
 
 static void DrawFullscreenSolidColor(const Color& color) {
@@ -4809,21 +4869,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                 auto fromBgTexIt = g_backgroundTextures.find(fromModeId);
                 if (fromBgTexIt != g_backgroundTextures.end()) {
                     BackgroundTextureInstance& bgInst = fromBgTexIt->second;
-                    if (bgInst.isAnimated && !bgInst.frameTextures.empty()) {
-                        auto now = std::chrono::steady_clock::now();
-                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bgInst.lastFrameTime).count();
-                        int delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
-                        if (delay < 10) delay = 100;
-                        while (elapsed >= delay) {
-                            elapsed -= delay;
-                            bgInst.currentFrame = (bgInst.currentFrame + 1) % bgInst.frameTextures.size();
-                            delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
-                            if (delay < 10) delay = 100;
-                        }
-                        bgInst.textureId = bgInst.frameTextures[bgInst.currentFrame];
-                        bgInst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
-                    }
-                    fromBgTex = bgInst.textureId;
+                    fromBgTex = ResolveAnimatedTextureId(bgInst);
                 }
             }
         }
@@ -4835,21 +4881,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             auto bgTexIt = g_backgroundTextures.find(modeToRender->id);
             if (bgTexIt != g_backgroundTextures.end()) {
                 BackgroundTextureInstance& bgInst = bgTexIt->second;
-                if (bgInst.isAnimated && !bgInst.frameTextures.empty()) {
-                    auto now = std::chrono::steady_clock::now();
-                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bgInst.lastFrameTime).count();
-                    int delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
-                    if (delay < 10) delay = 100;
-                    while (elapsed >= delay) {
-                        elapsed -= delay;
-                        bgInst.currentFrame = (bgInst.currentFrame + 1) % bgInst.frameTextures.size();
-                        delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
-                        if (delay < 10) delay = 100;
-                    }
-                    bgInst.textureId = bgInst.frameTextures[bgInst.currentFrame];
-                    bgInst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
-                }
-                bgTex = bgInst.textureId;
+                bgTex = ResolveAnimatedTextureId(bgInst);
             }
         }
 
@@ -5367,6 +5399,17 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         int displayH = static_cast<int>(croppedH * conf.scale);
                         if (displayW < 1) displayW = 1;
                         if (displayH < 1) displayH = 1;
+
+                        const bool isViewportRelative =
+                            conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";
+                        if (isViewportRelative) {
+                            const float viewportScaleX =
+                                (currentGeo.finalW > 0 && currentGeo.gameW > 0) ? static_cast<float>(currentGeo.finalW) / currentGeo.gameW : 1.0f;
+                            const float viewportScaleY =
+                                (currentGeo.finalH > 0 && currentGeo.gameH > 0) ? static_cast<float>(currentGeo.finalH) / currentGeo.gameH : 1.0f;
+                            ScaleViewportRelativeImageSize(displayW, displayH, modeToRender->relativeStretching, viewportScaleX,
+                                                           viewportScaleY, displayW, displayH);
+                        }
 
                         int finalScreenX_win, finalScreenY_win;
                         GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, displayW, displayH, currentGeo.finalX,

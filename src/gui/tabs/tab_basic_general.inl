@@ -306,7 +306,7 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
                         int maxCloneWidth = (modeConfig ? modeConfig->width : maxWidth);
                     if (maxCloneWidth < 2) maxCloneWidth = 2;
                         if (maxCloneWidth < g_config.eyezoom.cloneWidth) maxCloneWidth = g_config.eyezoom.cloneWidth;
-                    if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth, 64, 3)) {
+                    if (SpinnerDeferredTextInput("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth, 64, 3)) {
                         if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
                         int maxOverlay = g_config.eyezoom.cloneWidth / 2;
                         if (g_config.eyezoom.overlayWidth > maxOverlay) g_config.eyezoom.overlayWidth = maxOverlay;
@@ -316,7 +316,7 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
                     ImGui::TableSetColumnIndex(1);
                     {
                         int maxOverlay = g_config.eyezoom.cloneWidth / 2;
-                        if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay, 64, 3)) g_configIsDirty = true;
+                        if (SpinnerDeferredTextInput("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay, 64, 3)) g_configIsDirty = true;
                     }
                 }
 

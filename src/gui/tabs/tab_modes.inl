@@ -408,7 +408,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 // Clone Width must be even - step by 2, enforce even values
                     int maxCloneWidth = mode.width;
                     if (maxCloneWidth < g_config.eyezoom.cloneWidth) maxCloneWidth = g_config.eyezoom.cloneWidth;
-                if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth)) {
+                if (SpinnerDeferredTextInput("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth)) {
                     if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
                     int maxOverlay = g_config.eyezoom.cloneWidth / 2;
                     if (g_config.eyezoom.overlayWidth > maxOverlay) g_config.eyezoom.overlayWidth = maxOverlay;
@@ -419,7 +419,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 ImGui::NextColumn();
                     int maxCloneHeight = mode.height;
                     if (maxCloneHeight < g_config.eyezoom.cloneHeight) maxCloneHeight = g_config.eyezoom.cloneHeight;
-                if (Spinner("##EyeZoomCloneHeight", &g_config.eyezoom.cloneHeight, 10, 1, maxCloneHeight)) g_configIsDirty = true;
+                if (SpinnerDeferredTextInput("##EyeZoomCloneHeight", &g_config.eyezoom.cloneHeight, 10, 1, maxCloneHeight)) g_configIsDirty = true;
                 ImGui::Columns(1);
 
                 ImGui::Separator();
@@ -437,7 +437,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         int maxOverlay = g_config.eyezoom.cloneWidth / 2;
                         ImGui::Text(trc("modes.eyezoom.overlay_pixels"));
                         ImGui::SameLine();
-                        if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay)) g_configIsDirty = true;
+                        if (SpinnerDeferredTextInput("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay)) g_configIsDirty = true;
                         ImGui::SameLine();
                         HelpMarker(trc("modes.eyezoom.tooltip.overlay_pixels"));
                         ImGui::TreePop();
@@ -619,11 +619,11 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 constexpr int kEyeZoomMaxCustomPosition = 16384;
                 int maxZoomAreaWidth = (std::max)(kEyeZoomMaxCustomDimension, g_config.eyezoom.zoomAreaWidth);
                 int maxZoomAreaHeight = (std::max)(kEyeZoomMaxCustomDimension, g_config.eyezoom.zoomAreaHeight);
-                if (Spinner("##EyeZoomAreaWidth", &g_config.eyezoom.zoomAreaWidth, 10, 1, maxZoomAreaWidth)) g_configIsDirty = true;
+                if (SpinnerDeferredTextInput("##EyeZoomAreaWidth", &g_config.eyezoom.zoomAreaWidth, 10, 1, maxZoomAreaWidth)) g_configIsDirty = true;
                 ImGui::NextColumn();
                 ImGui::Text(trc("modes.eyezoom.zoom_area_height"));
                 ImGui::NextColumn();
-                if (Spinner("##EyeZoomAreaHeight", &g_config.eyezoom.zoomAreaHeight, 10, 1, maxZoomAreaHeight)) g_configIsDirty = true;
+                if (SpinnerDeferredTextInput("##EyeZoomAreaHeight", &g_config.eyezoom.zoomAreaHeight, 10, 1, maxZoomAreaHeight)) g_configIsDirty = true;
                 ImGui::Columns(1);
 
                 ImGui::Separator();
@@ -636,11 +636,11 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 ImGui::SetColumnWidth(0, 150);
                 ImGui::Text(trc("label.position_x"));
                 ImGui::NextColumn();
-                if (Spinner("##EyeZoomPositionX", &g_config.eyezoom.positionX, 10, 0, maxPosX)) g_configIsDirty = true;
+                if (SpinnerDeferredTextInput("##EyeZoomPositionX", &g_config.eyezoom.positionX, 10, 0, maxPosX)) g_configIsDirty = true;
                 ImGui::NextColumn();
                 ImGui::Text(trc("label.position_y"));
                 ImGui::NextColumn();
-                if (Spinner("##EyeZoomPositionY", &g_config.eyezoom.positionY, 10, 0, maxPosY)) g_configIsDirty = true;
+                if (SpinnerDeferredTextInput("##EyeZoomPositionY", &g_config.eyezoom.positionY, 10, 0, maxPosY)) g_configIsDirty = true;
                 ImGui::Columns(1);
 
                 ImGui::EndDisabled();
