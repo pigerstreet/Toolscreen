@@ -7,6 +7,7 @@
 #include <array>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <unordered_map>
 
 // Updated by UpdateMirrorCaptureConfigs (logic thread) and read by SwapBuffers hook.
@@ -2106,13 +2107,14 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
             if (mapped) {
                 int orangeCount = 0, greenCount = 0;
                 // Integer math: reference colors and threshold in 0-255 space (no per-pixel float conversion)
-                const int oR = static_cast<int>(cfg.orangeReference.r * 255.0f);
-                const int oG = static_cast<int>(cfg.orangeReference.g * 255.0f);
-                const int oB = static_cast<int>(cfg.orangeReference.b * 255.0f);
-                const int gR = static_cast<int>(cfg.greenReference.r * 255.0f);
-                const int gG = static_cast<int>(cfg.greenReference.g * 255.0f);
-                const int gB = static_cast<int>(cfg.greenReference.b * 255.0f);
-                const int threshSq = static_cast<int>(cfg.colorThreshold * 255.0f * cfg.colorThreshold * 255.0f);
+                const int oR = static_cast<int>(std::lround(cfg.orangeReference.r * 255.0f));
+                const int oG = static_cast<int>(std::lround(cfg.orangeReference.g * 255.0f));
+                const int oB = static_cast<int>(std::lround(cfg.orangeReference.b * 255.0f));
+                const int gR = static_cast<int>(std::lround(cfg.greenReference.r * 255.0f));
+                const int gG = static_cast<int>(std::lround(cfg.greenReference.g * 255.0f));
+                const int gB = static_cast<int>(std::lround(cfg.greenReference.b * 255.0f));
+                const float threshF = cfg.colorThreshold * 255.0f;
+                const int threshSq = static_cast<int>(threshF * threshF);
                 const int w = res.texW;
                 const int h = res.texH;
                 const int step = 2;
@@ -2195,10 +2197,8 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
     res.texH = captureH;
 
     // Clean up old fence
-    if (res.fence) {
-        if (glIsSync(res.fence)) { glDeleteSync(res.fence); }
-        res.fence = nullptr;
-    }
+    if (res.fence && glIsSync(res.fence)) { glDeleteSync(res.fence); }
+    res.fence = nullptr;
 
     // Ensure cached read FBO exists
     if (res.srcFbo == 0) {
@@ -2699,27 +2699,30 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
     }
 
     // Pie spike chart analysis — analyze "Pie" mirror texture on the same thread
+    // Check alert active flag first as a cheap pre-check before acquiring config snapshot
     {
+        static bool s_pieSpikeWasEnabled = false;
         auto snap = GetConfigSnapshot();
-        if (snap && snap->pieSpike.enabled) {
+        const bool pieSpikeEnabled = snap && snap->pieSpike.enabled;
+
+        if (pieSpikeEnabled) {
             static MT_PieSpikeGpuResources s_pieSpikeRes;
+            s_pieSpikeWasEnabled = true;
 
             GLuint pieSrcTex = 0;
             int pieSrcW = 0, pieSrcH = 0;
             bool fromMirror = false;
 
             // Try to use the "Pie" mirror's texture (already captured this frame)
-            {
-                auto it = g_mirrorInstances.find("Pie");
-                if (it != g_mirrorInstances.end()) {
-                    const MirrorInstance& pieMirror = it->second;
-                    if (pieMirror.fboTexture != 0 && pieMirror.fbo_w > 0 && pieMirror.fbo_h > 0 &&
-                        pieMirror.hasFrameContent) {
-                        pieSrcTex = pieMirror.fboTexture;
-                        pieSrcW = pieMirror.fbo_w;
-                        pieSrcH = pieMirror.fbo_h;
-                        fromMirror = true;
-                    }
+            auto it = g_mirrorInstances.find("Pie");
+            if (it != g_mirrorInstances.end()) {
+                const MirrorInstance& pieMirror = it->second;
+                if (pieMirror.fboTexture != 0 && pieMirror.fbo_w > 0 && pieMirror.fbo_h > 0 &&
+                    pieMirror.hasFrameContent) {
+                    pieSrcTex = pieMirror.fboTexture;
+                    pieSrcW = pieMirror.fbo_w;
+                    pieSrcH = pieMirror.fbo_h;
+                    fromMirror = true;
                 }
             }
 
@@ -2733,6 +2736,10 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
             if (pieSrcTex != 0) {
                 MT_AnalyzePieSpikeChart(s_pieSpikeRes, pieSrcTex, pieSrcW, pieSrcH, snap->pieSpike, fromMirror);
             }
+        } else if (s_pieSpikeWasEnabled) {
+            // Clear stale alert when pie spike gets disabled
+            s_pieSpikeWasEnabled = false;
+            g_pieSpikeAlertActive.store(false, std::memory_order_release);
         }
     }
 

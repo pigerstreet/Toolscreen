@@ -3668,28 +3668,30 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
     RenderPerformanceOverlay(request.showPerformanceOverlay);
     RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
 
-    // Pie spike indicator text
+    // Pie spike indicator badge (bottom-right corner, DPI-scaled)
     if (request.showPieSpikeAlert && request.pieSpikeMatchedName[0] != '\0') {
         ImFont* font = ImGui::GetFont();
         if (font) {
             ImDrawList* drawList = ImGui::GetForegroundDrawList();
             const char* label = request.pieSpikeMatchedName;
-            constexpr float kFontSize = 16.0f;
-            constexpr float kPadX = 6.0f;
-            constexpr float kPadY = 4.0f;
-            constexpr float kMargin = 10.0f;
+            const float dpiScale = request.fullH > 0 ? static_cast<float>(request.fullH) / 1080.0f : 1.0f;
+            const float fontSize = 16.0f * dpiScale;
+            const float padX = 6.0f * dpiScale;
+            const float padY = 4.0f * dpiScale;
+            const float margin = 10.0f * dpiScale;
+            const float rounding = 4.0f * dpiScale;
 
-            ImVec2 textSize = font->CalcTextSizeA(kFontSize, FLT_MAX, 0.0f, label);
-            float boxW = textSize.x + kPadX * 2;
-            float boxH = textSize.y + kPadY * 2;
-            float boxX = request.fullW - kMargin - boxW;
-            float boxY = request.fullH - kMargin - boxH;
+            ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
+            float boxW = textSize.x + padX * 2;
+            float boxH = textSize.y + padY * 2;
+            float boxX = request.fullW - margin - boxW;
+            float boxY = request.fullH - margin - boxH;
 
             drawList->AddRectFilled(
                 ImVec2(boxX, boxY), ImVec2(boxX + boxW, boxY + boxH),
-                IM_COL32(233, 109, 77, 220), 4.0f);
-            drawList->AddText(font, kFontSize,
-                ImVec2(boxX + kPadX, boxY + kPadY),
+                IM_COL32(233, 109, 77, 220), rounding);
+            drawList->AddText(font, fontSize,
+                ImVec2(boxX + padX, boxY + padY),
                 IM_COL32(255, 255, 255, 255), label);
         }
     }
