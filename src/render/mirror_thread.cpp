@@ -2066,6 +2066,13 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
     if (elapsed < cfg.sampleRateMs) return;
     res.lastSampleTime = now;
 
+    // Save GL state we're about to modify — this runs on the game's GL context
+    GLint prevReadFbo = 0, prevDrawFbo = 0, prevPbo = 0, prevTex2D = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFbo);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPbo);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex2D);
+
     int capX, capY, captureW, captureH;
 
     if (fromMirror) {
@@ -2232,6 +2239,12 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
 
     res.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     res.readbackPending = true;
+
+    // Restore GL state to what the caller expects
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFbo);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, prevPbo);
+    BindTextureDirect(GL_TEXTURE_2D, prevTex2D);
 }
 
 static void MT_ReleaseContentDetectionResources(MT_MirrorFbos& fb) {
