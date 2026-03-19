@@ -8,6 +8,8 @@
 #include "version.h"
 #include <Windows.h>
 #include <mmsystem.h>
+#include <cfloat>
+#include <cmath>
 #include <unordered_map>
 #include <unordered_set>
 #include <thread>
@@ -721,13 +723,17 @@ static void CheckPieSpikeDetection() {
 
     bool spikeDetected = false;
     std::string matchedName;
+    float bestDistance = FLT_MAX;
     for (const auto& t : snap->pieSpike.targets) {
         if (!t.enabled) continue;
         if (result.orangeRatio >= t.ratio - t.tolerance &&
             result.orangeRatio <= t.ratio + t.tolerance) {
-            spikeDetected = true;
-            matchedName = t.name;
-            break;
+            float dist = std::abs(result.orangeRatio - t.ratio);
+            if (dist < bestDistance) {
+                bestDistance = dist;
+                spikeDetected = true;
+                matchedName = t.name;
+            }
         }
     }
 
