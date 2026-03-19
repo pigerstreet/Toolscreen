@@ -2124,31 +2124,28 @@ static void MT_AnalyzePieSpikeChart(MT_PieSpikeGpuResources& res, GLuint srcTex,
                 const int threshSq = static_cast<int>(threshF * threshF);
                 const int w = res.texW;
                 const int h = res.texH;
-                const int step = 2;
+                const int totalPixels = w * h;
 
-                for (int y = 0; y < h; y += step) {
-                    const unsigned char* row = mapped + (static_cast<size_t>(y) * w * 4);
-                    for (int x = 0; x < w; x += step) {
-                        const int idx = x * 4;
-                        const int r = row[idx];
-                        const int g = row[idx + 1];
-                        const int b = row[idx + 2];
+                for (int i = 0; i < totalPixels; ++i) {
+                    const int idx = i * 4;
+                    const int r = mapped[idx];
+                    const int g = mapped[idx + 1];
+                    const int b = mapped[idx + 2];
 
-                        int dOrange = (r - oR) * (r - oR) + (g - oG) * (g - oG) + (b - oB) * (b - oB);
-                        int dGreen = (r - gR) * (r - gR) + (g - gG) * (g - gG) + (b - gB) * (b - gB);
+                    int dOrange = (r - oR) * (r - oR) + (g - oG) * (g - oG) + (b - oB) * (b - oB);
+                    int dGreen = (r - gR) * (r - gR) + (g - gG) * (g - gG) + (b - gB) * (b - gB);
 
-                        if (dOrange < threshSq) { orangeCount++; }
-                        else if (dGreen < threshSq) { greenCount++; }
-                    }
+                    if (dOrange < threshSq) { orangeCount++; }
+                    else if (dGreen < threshSq) { greenCount++; }
                 }
 
                 glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
 
                 result.orangePixels = orangeCount;
                 result.greenPixels = greenCount;
-                result.totalSampled = (w / step) * (h / step);
+                result.totalSampled = totalPixels;
                 int total = orangeCount + greenCount;
-                constexpr int kMinColoredPixels = 500;
+                constexpr int kMinColoredPixels = 200;
                 result.orangeRatio = (total > kMinColoredPixels) ? static_cast<float>(orangeCount) / static_cast<float>(total) : 0.0f;
                 result.valid = (total > kMinColoredPixels);
             } else {
