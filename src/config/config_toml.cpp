@@ -825,6 +825,7 @@ void BrowserOverlayConfigToToml(const BrowserOverlayConfig& cfg, toml::table& ou
     out.insert("fps", cfg.fps);
     out.insert("transparentBackground", cfg.transparentBackground);
     out.insert("muteAudio", cfg.muteAudio);
+    out.insert("allowSystemMediaKeys", cfg.allowSystemMediaKeys);
     out.insert("reloadOnUpdate", cfg.reloadOnUpdate);
     out.insert("reloadInterval", cfg.reloadInterval);
 
@@ -869,6 +870,7 @@ void BrowserOverlayConfigFromToml(const toml::table& tbl, BrowserOverlayConfig& 
     cfg.fps = GetOr(tbl, "fps", ConfigDefaults::BROWSER_OVERLAY_FPS);
     cfg.transparentBackground = GetOr(tbl, "transparentBackground", ConfigDefaults::BROWSER_OVERLAY_TRANSPARENT_BACKGROUND);
     cfg.muteAudio = GetOr(tbl, "muteAudio", ConfigDefaults::BROWSER_OVERLAY_MUTE_AUDIO);
+    cfg.allowSystemMediaKeys = GetOr(tbl, "allowSystemMediaKeys", ConfigDefaults::BROWSER_OVERLAY_ALLOW_SYSTEM_MEDIA_KEYS);
     cfg.reloadOnUpdate = GetOr(tbl, "reloadOnUpdate", ConfigDefaults::BROWSER_OVERLAY_RELOAD_ON_UPDATE);
     cfg.reloadInterval = GetOr(tbl, "reloadInterval", ConfigDefaults::BROWSER_OVERLAY_RELOAD_INTERVAL);
 

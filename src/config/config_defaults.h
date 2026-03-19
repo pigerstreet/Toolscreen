@@ -98,6 +98,7 @@ inline const std::string BROWSER_OVERLAY_CUSTOM_CSS = "";
 constexpr bool BROWSER_OVERLAY_ENABLE_COLOR_KEY = false;
 constexpr bool BROWSER_OVERLAY_TRANSPARENT_BACKGROUND = false;
 constexpr bool BROWSER_OVERLAY_MUTE_AUDIO = true;
+constexpr bool BROWSER_OVERLAY_ALLOW_SYSTEM_MEDIA_KEYS = true;
 constexpr bool BROWSER_OVERLAY_RELOAD_ON_UPDATE = false;
 constexpr int BROWSER_OVERLAY_RELOAD_INTERVAL = 0;
 

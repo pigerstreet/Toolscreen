@@ -238,6 +238,10 @@ if (ImGui::BeginTabItem(trc("tabs.browser_overlays"))) {
 
             if (ImGui::Checkbox(trc("browser.overlays_reload_on_update"), &overlay.reloadOnUpdate)) g_configIsDirty = true;
             if (ImGui::Checkbox(trc("browser.overlays_mute_audio"), &overlay.muteAudio)) g_configIsDirty = true;
+            if (ImGui::Checkbox(trc("browser.overlays_allow_system_media_keys"), &overlay.allowSystemMediaKeys)) g_configIsDirty = true;
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(trc("browser.tooltip.allow_system_media_keys"));
+            }
 
             ImGui::SeparatorText(trc("browser.overlays_background"));
             if (ImGui::Checkbox(trc("browser.overlays_enable_background"), &overlay.background.enabled)) g_configIsDirty = true;

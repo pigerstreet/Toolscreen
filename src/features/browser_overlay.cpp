@@ -5,6 +5,7 @@
 #include "third_party/stb_image.h"
 
 #include <WebView2.h>
+#include <WebView2EnvironmentOptions.h>
 #include <wrl.h>
 #include <array>
 #include <algorithm>
@@ -38,6 +39,14 @@ constexpr wchar_t kBrowserOverlayHostClassName[] = L"ToolscreenBrowserOverlayHos
 constexpr int kBrowserOverlayOffscreenPos = -32000;
 constexpr size_t kBrowserOverlayMaxFrameBytes = 100ull * 1024ull * 1024ull;
 constexpr size_t kBrowserOverlayUploadPboCount = 3;
+constexpr size_t kBrowserOverlayEnvironmentCount = 2;
+
+struct BrowserOverlayEnvironmentState {
+    ComPtr<ICoreWebView2Environment> environment;
+    std::atomic<bool> requested{ false };
+    std::atomic<bool> ready{ false };
+    std::atomic<bool> failed{ false };
+};
 
 struct BrowserOverlayRenderData {
     unsigned char* pixelData = nullptr;
@@ -65,6 +74,7 @@ struct BrowserOverlayCacheEntry {
     int fps = 15;
     bool transparentBackground = false;
     bool muteAudio = true;
+    bool allowSystemMediaKeys = true;
     bool reloadOnUpdate = false;
     int reloadInterval = 0;
     bool markedForRemoval = false;
@@ -149,10 +159,7 @@ std::condition_variable g_browserOverlayDecodeCv;
 
 HMODULE g_webView2LoaderModule = nullptr;
 CreateCoreWebView2EnvironmentWithOptionsFn g_createEnvironmentWithOptions = nullptr;
-ComPtr<ICoreWebView2Environment> g_browserOverlayEnvironment;
-std::atomic<bool> g_browserOverlayEnvironmentRequested{ false };
-std::atomic<bool> g_browserOverlayEnvironmentReady{ false };
-std::atomic<bool> g_browserOverlayEnvironmentFailed{ false };
+std::array<BrowserOverlayEnvironmentState, kBrowserOverlayEnvironmentCount> g_browserOverlayEnvironments;
 std::atomic<bool> g_browserOverlayHostClassRegistered{ false };
 
 LRESULT CALLBACK BrowserOverlayHostWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -241,6 +248,40 @@ std::wstring GetBrowserOverlayUserDataFolder() {
     std::error_code ec;
     std::filesystem::create_directories(userDataPath, ec);
     return userDataPath.wstring();
+}
+
+size_t GetBrowserOverlayEnvironmentIndex(bool allowSystemMediaKeys) {
+    return allowSystemMediaKeys ? 1u : 0u;
+}
+
+std::wstring GetBrowserOverlayEnvironmentModeName(bool allowSystemMediaKeys) {
+    return allowSystemMediaKeys ? L"media-keys-enabled" : L"media-keys-disabled";
+}
+
+std::string GetBrowserOverlayEnvironmentModeLabel(bool allowSystemMediaKeys) {
+    return allowSystemMediaKeys ? "system media keys enabled" : "system media keys disabled";
+}
+
+std::wstring GetBrowserOverlayUserDataFolder(bool allowSystemMediaKeys) {
+    const std::filesystem::path userDataPath =
+        std::filesystem::path(GetBrowserOverlayUserDataFolder()) / GetBrowserOverlayEnvironmentModeName(allowSystemMediaKeys);
+    std::error_code ec;
+    std::filesystem::create_directories(userDataPath, ec);
+    return userDataPath.wstring();
+}
+
+ComPtr<ICoreWebView2EnvironmentOptions> CreateBrowserOverlayEnvironmentOptions(bool allowSystemMediaKeys) {
+    if (allowSystemMediaKeys) {
+        return nullptr;
+    }
+
+    auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+    if (!options) {
+        return nullptr;
+    }
+
+    options->put_AdditionalBrowserArguments(L"--disable-features=HardwareMediaKeyHandling");
+    return options;
 }
 
 void PumpBrowserOverlayMessages() {
@@ -360,37 +401,47 @@ void ApplyBrowserOverlayInjectedStyles(BrowserOverlayCacheEntry& entry) {
             .Get());
 }
 
-bool EnsureBrowserOverlayEnvironment() {
-    if (g_browserOverlayEnvironmentReady.load(std::memory_order_acquire)) {
+bool EnsureBrowserOverlayEnvironment(bool allowSystemMediaKeys) {
+    BrowserOverlayEnvironmentState& environmentState =
+        g_browserOverlayEnvironments[GetBrowserOverlayEnvironmentIndex(allowSystemMediaKeys)];
+
+    if (environmentState.ready.load(std::memory_order_acquire)) {
         return true;
     }
-    if (g_browserOverlayEnvironmentFailed.load(std::memory_order_acquire)) {
+    if (environmentState.failed.load(std::memory_order_acquire)) {
         return false;
     }
-    if (g_browserOverlayEnvironmentRequested.exchange(true, std::memory_order_acq_rel)) {
-        return g_browserOverlayEnvironmentReady.load(std::memory_order_acquire);
+    if (environmentState.requested.exchange(true, std::memory_order_acq_rel)) {
+        return environmentState.ready.load(std::memory_order_acquire);
     }
 
     if (!EnsureWebView2Loader()) {
-        g_browserOverlayEnvironmentFailed.store(true, std::memory_order_release);
+        environmentState.failed.store(true, std::memory_order_release);
         return false;
     }
 
     HANDLE completionEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!completionEvent) {
         Log("[BrowserOverlay] Failed to create WebView2 environment wait event.");
-        g_browserOverlayEnvironmentFailed.store(true, std::memory_order_release);
+        environmentState.failed.store(true, std::memory_order_release);
         return false;
     }
 
     HRESULT createResult = E_FAIL;
     ComPtr<ICoreWebView2Environment> createdEnvironment;
-    const std::wstring userDataFolder = GetBrowserOverlayUserDataFolder();
+    const std::wstring userDataFolder = GetBrowserOverlayUserDataFolder(allowSystemMediaKeys);
+    ComPtr<ICoreWebView2EnvironmentOptions> environmentOptions = CreateBrowserOverlayEnvironmentOptions(allowSystemMediaKeys);
+    if (!allowSystemMediaKeys && !environmentOptions) {
+        Log("[BrowserOverlay] Failed to create WebView2 environment options for " + GetBrowserOverlayEnvironmentModeLabel(allowSystemMediaKeys));
+        CloseHandle(completionEvent);
+        environmentState.failed.store(true, std::memory_order_release);
+        return false;
+    }
 
     const HRESULT hr = g_createEnvironmentWithOptions(
         nullptr,
         userDataFolder.c_str(),
-        nullptr,
+        environmentOptions.Get(),
         Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [&createResult, &createdEnvironment, completionEvent](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
                 createResult = result;
@@ -403,7 +454,7 @@ bool EnsureBrowserOverlayEnvironment() {
     if (FAILED(hr)) {
         Log("[BrowserOverlay] CreateCoreWebView2EnvironmentWithOptions failed: " + FormatHexResult(hr));
         CloseHandle(completionEvent);
-        g_browserOverlayEnvironmentFailed.store(true, std::memory_order_release);
+        environmentState.failed.store(true, std::memory_order_release);
         return false;
     }
 
@@ -424,14 +475,22 @@ bool EnsureBrowserOverlayEnvironment() {
 
     if (FAILED(createResult) || !createdEnvironment) {
         Log("[BrowserOverlay] WebView2 environment creation failed: " + FormatHexResult(createResult));
-        g_browserOverlayEnvironmentFailed.store(true, std::memory_order_release);
+        environmentState.failed.store(true, std::memory_order_release);
         return false;
     }
 
-    g_browserOverlayEnvironment = createdEnvironment;
-    g_browserOverlayEnvironmentReady.store(true, std::memory_order_release);
-    Log("[BrowserOverlay] WebView2 environment initialized");
+    environmentState.environment = createdEnvironment;
+    environmentState.ready.store(true, std::memory_order_release);
+    Log("[BrowserOverlay] WebView2 environment initialized (" + GetBrowserOverlayEnvironmentModeLabel(allowSystemMediaKeys) + ")");
     return true;
+}
+
+ICoreWebView2Environment* GetBrowserOverlayEnvironment(bool allowSystemMediaKeys) {
+    if (!EnsureBrowserOverlayEnvironment(allowSystemMediaKeys)) {
+        return nullptr;
+    }
+
+    return g_browserOverlayEnvironments[GetBrowserOverlayEnvironmentIndex(allowSystemMediaKeys)].environment.Get();
 }
 
 void UpdateBrowserOverlayBuffer(BrowserOverlayCacheEntry& entry, const unsigned char* pixels, int width, int height) {
@@ -833,6 +892,11 @@ void ConfigureBrowserOverlayController(const std::string& overlayId, BrowserOver
     if (SUCCEEDED(entry.webview->get_Settings(&settings)) && settings) {
         settings->put_AreDevToolsEnabled(FALSE);
         settings->put_AreDefaultContextMenusEnabled(FALSE);
+
+        ComPtr<ICoreWebView2Settings3> settings3;
+        if (SUCCEEDED(settings.As(&settings3)) && settings3) {
+            settings3->put_AreBrowserAcceleratorKeysEnabled(entry.allowSystemMediaKeys ? TRUE : FALSE);
+        }
     }
 
     ApplyBrowserOverlayControllerSettings(entry);
@@ -903,9 +967,12 @@ void ConfigureBrowserOverlayController(const std::string& overlayId, BrowserOver
 }
 
 void BeginBrowserOverlayControllerCreation(const std::string& overlayId, BrowserOverlayCacheEntry& entry) {
-    if (!g_browserOverlayEnvironment || entry.controller || entry.controllerCreationPending || entry.controllerCreationFailed) {
+    ICoreWebView2Environment* environment = GetBrowserOverlayEnvironment(entry.allowSystemMediaKeys);
+    if (!environment || entry.controller || entry.controllerCreationPending || entry.controllerCreationFailed) {
         return;
     }
+
+    const bool allowSystemMediaKeys = entry.allowSystemMediaKeys;
 
     if (!entry.hostWindow) {
         entry.hostWindow = CreateBrowserOverlayHostWindow(Utf8ToWide("Toolscreen Browser Overlay - " + overlayId), entry.browserWidth,
@@ -919,10 +986,10 @@ void BeginBrowserOverlayControllerCreation(const std::string& overlayId, Browser
 
     entry.controllerCreationPending = true;
 
-    g_browserOverlayEnvironment->CreateCoreWebView2Controller(
+    environment->CreateCoreWebView2Controller(
         entry.hostWindow,
         Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-            [overlayId](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+            [overlayId, allowSystemMediaKeys](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                 std::lock_guard<std::mutex> lock(g_browserOverlayCacheMutex);
                 auto it = g_browserOverlayCache.find(overlayId);
                 if (it == g_browserOverlayCache.end() || !it->second) {
@@ -940,7 +1007,15 @@ void BeginBrowserOverlayControllerCreation(const std::string& overlayId, Browser
                     return S_OK;
                 }
 
+                if (entry.allowSystemMediaKeys != allowSystemMediaKeys) {
+                    controller->Close();
+                    entry.controllerCreationFailed = false;
+                    BeginBrowserOverlayControllerCreation(overlayId, entry);
+                    return S_OK;
+                }
+
                 entry.controller = controller;
+                entry.controllerCreationFailed = false;
                 ConfigureBrowserOverlayController(overlayId, entry);
                 return S_OK;
             })
@@ -953,7 +1028,9 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
     bool cssChanged = false;
     bool sizeChanged = false;
     bool transparencyChanged = false;
+    bool mediaKeyHandlingChanged = false;
     const bool transparentModeEnabled = config.transparentBackground;
+    const bool allowSystemMediaKeys = config.allowSystemMediaKeys;
 
     {
         std::lock_guard<std::mutex> lock(g_browserOverlayCacheMutex);
@@ -968,6 +1045,7 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
             slot->fps = (std::max)(1, config.fps);
             slot->transparentBackground = transparentModeEnabled;
             slot->muteAudio = config.muteAudio;
+            slot->allowSystemMediaKeys = allowSystemMediaKeys;
             slot->reloadOnUpdate = config.reloadOnUpdate;
             slot->reloadInterval = (std::max)(0, config.reloadInterval);
         } else {
@@ -975,6 +1053,7 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
             cssChanged = slot->customCss != config.customCss;
             sizeChanged = slot->browserWidth != config.browserWidth || slot->browserHeight != config.browserHeight;
             transparencyChanged = slot->transparentBackground != transparentModeEnabled;
+            mediaKeyHandlingChanged = slot->allowSystemMediaKeys != allowSystemMediaKeys;
             slot->url = config.url;
             slot->customCss = config.customCss;
             slot->browserWidth = (std::max)(1, config.browserWidth);
@@ -982,6 +1061,7 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
             slot->fps = (std::max)(1, config.fps);
             slot->transparentBackground = transparentModeEnabled;
             slot->muteAudio = config.muteAudio;
+            slot->allowSystemMediaKeys = allowSystemMediaKeys;
             slot->reloadOnUpdate = config.reloadOnUpdate;
             slot->reloadInterval = (std::max)(0, config.reloadInterval);
             slot->markedForRemoval = false;
@@ -995,7 +1075,19 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
 
     UpdateBrowserOverlayBounds(*entryPtr);
 
+    if (mediaKeyHandlingChanged && !entryPtr->controllerCreationPending) {
+        DestroyBrowserOverlayEntry(*entryPtr);
+        entryPtr->controllerCreationPending = false;
+        entryPtr->controllerCreationFailed = false;
+        entryPtr->captureInFlight = false;
+        entryPtr->hasSeenContentLoading = false;
+        entryPtr->pendingReload = false;
+        entryPtr->lastCaptureTime = std::chrono::steady_clock::time_point{};
+        entryPtr->lastReloadTime = std::chrono::steady_clock::time_point{};
+    }
+
     if (!entryPtr->controller) {
+        entryPtr->controllerCreationFailed = false;
         BeginBrowserOverlayControllerCreation(config.name, *entryPtr);
         return;
     }
@@ -1017,10 +1109,6 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
 }
 
 void ReconcileBrowserOverlays() {
-    if (!EnsureBrowserOverlayEnvironment()) {
-        return;
-    }
-
     auto snapshot = GetConfigSnapshot();
     if (!snapshot) {
         return;
@@ -1338,10 +1426,12 @@ void BrowserOverlayThreadFunc() {
         }
     }
 
-    g_browserOverlayEnvironment.Reset();
-    g_browserOverlayEnvironmentReady.store(false, std::memory_order_release);
-    g_browserOverlayEnvironmentFailed.store(false, std::memory_order_release);
-    g_browserOverlayEnvironmentRequested.store(false, std::memory_order_release);
+    for (BrowserOverlayEnvironmentState& environmentState : g_browserOverlayEnvironments) {
+        environmentState.environment.Reset();
+        environmentState.ready.store(false, std::memory_order_release);
+        environmentState.failed.store(false, std::memory_order_release);
+        environmentState.requested.store(false, std::memory_order_release);
+    }
 
     if (g_webView2LoaderModule) {
         FreeLibrary(g_webView2LoaderModule);

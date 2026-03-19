@@ -270,6 +270,7 @@ struct BrowserOverlayConfig {
     int fps = 15;
     bool transparentBackground = false;
     bool muteAudio = true;
+    bool allowSystemMediaKeys = true;
     bool reloadOnUpdate = false;
     int reloadInterval = 0;
     BorderConfig border;
