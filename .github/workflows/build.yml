@@ -23,46 +23,6 @@ jobs:
         shell: cmd
         run: build.bat release --test
 
-      - name: Rename release artifacts
-        shell: pwsh
-        run: |
-          $outputDir = 'out/build/bin/Release'
-          $suffix = '-not-legal-for-speedruns'
-
-          function Get-SingleArtifactPath {
-            param(
-              [string]$Pattern,
-              [string]$Label
-            )
-
-            $matches = Get-ChildItem $outputDir -File -Filter $Pattern
-
-            if ($matches.Count -ne 1) {
-              throw "Expected exactly one $Label matching '$Pattern' in $outputDir, found $($matches.Count)"
-            }
-
-            return $matches[0].FullName
-          }
-
-          $filesToRename = @(
-            Join-Path $outputDir 'Toolscreen.dll'
-            Join-Path $outputDir 'Toolscreen.pdb'
-            Get-SingleArtifactPath 'Toolscreen-*-double-click-me.jar' 'main installer jar'
-            Get-SingleArtifactPath 'Toolscreen-*-double-click-me.exe' 'main installer exe'
-            Join-Path $outputDir 'toolscreen-downloader.jar'
-            Join-Path $outputDir 'toolscreen-downloader.exe'
-          )
-
-          foreach ($filePath in $filesToRename) {
-            if (-not (Test-Path $filePath)) {
-              throw "Expected artifact not found: $filePath"
-            }
-
-            $item = Get-Item $filePath
-            $renamed = '{0}{1}{2}' -f $item.BaseName, $suffix, $item.Extension
-            Move-Item -Path $item.FullName -Destination (Join-Path $item.DirectoryName $renamed)
-          }
-
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -70,9 +30,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.dll
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.pdb
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.jar
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.exe
+            out/build/bin/Release/Toolscreen.dll
+            out/build/bin/Release/Toolscreen.pdb
+            out/build/bin/Release/Toolscreen-*-double-click-me.jar
+            out/build/bin/Release/Toolscreen-*-double-click-me.exe
+            out/build/bin/Release/toolscreen-downloader.jar
+            out/build/bin/Release/toolscreen-downloader.exe
