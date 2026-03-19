@@ -2711,22 +2711,26 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
         renderedAny = true;
     }
 
-    // Pie spike chart analysis — analyze "Pie" mirror texture on the same thread
-    // Check alert active flag first as a cheap pre-check before acquiring config snapshot
-    {
-        static bool s_pieSpikeWasEnabled = false;
-        auto snap = GetConfigSnapshot();
-        const bool pieSpikeEnabled = snap && snap->pieSpike.enabled;
+    return renderedAny;
+}
 
-        if (pieSpikeEnabled) {
-            static MT_PieSpikeGpuResources s_pieSpikeRes;
-            s_pieSpikeWasEnabled = true;
+void RunPieSpikeAnalysis(GLuint gameTexture, int gameW, int gameH) {
+    static bool s_pieSpikeWasEnabled = false;
+    static MT_PieSpikeGpuResources s_pieSpikeRes;
 
-            GLuint pieSrcTex = 0;
-            int pieSrcW = 0, pieSrcH = 0;
-            bool fromMirror = false;
+    auto snap = GetConfigSnapshot();
+    const bool pieSpikeEnabled = snap && snap->pieSpike.enabled;
 
-            // Try to use the "Pie" mirror's texture (already captured this frame)
+    if (pieSpikeEnabled) {
+        s_pieSpikeWasEnabled = true;
+
+        GLuint pieSrcTex = 0;
+        int pieSrcW = 0, pieSrcH = 0;
+        bool fromMirror = false;
+
+        // Try to use the "Pie" mirror's texture (already captured this frame)
+        {
+            std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
             auto it = g_mirrorInstances.find("Pie");
             if (it != g_mirrorInstances.end()) {
                 const MirrorInstance& pieMirror = it->second;
@@ -2738,25 +2742,22 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
                     fromMirror = true;
                 }
             }
-
-            // Fallback to game texture with manual offsets if "Pie" mirror not available
-            if (!fromMirror && sourceTexture != 0) {
-                pieSrcTex = sourceTexture;
-                pieSrcW = gameW;
-                pieSrcH = gameH;
-            }
-
-            if (pieSrcTex != 0) {
-                MT_AnalyzePieSpikeChart(s_pieSpikeRes, pieSrcTex, pieSrcW, pieSrcH, snap->pieSpike, fromMirror);
-            }
-        } else if (s_pieSpikeWasEnabled) {
-            // Clear stale alert when pie spike gets disabled
-            s_pieSpikeWasEnabled = false;
-            g_pieSpikeAlertActive.store(false, std::memory_order_release);
         }
-    }
 
-    return renderedAny;
+        // Fallback to game texture with manual offsets if "Pie" mirror not available
+        if (!fromMirror && gameTexture != 0) {
+            pieSrcTex = gameTexture;
+            pieSrcW = gameW;
+            pieSrcH = gameH;
+        }
+
+        if (pieSrcTex != 0) {
+            MT_AnalyzePieSpikeChart(s_pieSpikeRes, pieSrcTex, pieSrcW, pieSrcH, snap->pieSpike, fromMirror);
+        }
+    } else if (s_pieSpikeWasEnabled) {
+        s_pieSpikeWasEnabled = false;
+        g_pieSpikeAlertActive.store(false, std::memory_order_release);
+    }
 }
 
 // Update capture configs from main thread (call when active mirrors change)

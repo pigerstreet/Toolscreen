@@ -3899,6 +3899,16 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             }
         }
 
+        // Pie spike analysis runs every frame, independent of mirror capture reuse
+        {
+            GLuint pieTex = sourceTexture;
+            int pieW = sourceW, pieH = sourceH;
+            if (pieTex == 0) {
+                SelectSameThreadGameTexture(request.gameTextureId, request.gameW, request.gameH, pieTex, pieW, pieH);
+            }
+            RunPieSpikeAnalysis(pieTex, pieW, pieH);
+        }
+
         if (!activeMirrors.empty()) {
             PROFILE_SCOPE_CAT("Render Active Mirrors", "Rendering");
             const bool isEyeZoomMode = (request.modeId == "EyeZoom");

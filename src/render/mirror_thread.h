@@ -84,6 +84,8 @@ void SwapMirrorBuffers();
 bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>& activeMirrorConfigs, GLuint sourceTexture, int gameW,
                                          int gameH, int screenW, int screenH, int finalX, int finalY, int finalW, int finalH);
 
+void RunPieSpikeAnalysis(GLuint gameTexture, int gameW, int gameH);
+
 void BuildThreadedMirrorConfigs(const std::vector<MirrorConfig>& activeMirrors, std::vector<ThreadedMirrorConfig>& outConfigs);
 
 // Update capture configs from main thread (call when active mirrors change)
