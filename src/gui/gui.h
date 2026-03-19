@@ -472,7 +472,7 @@ struct KeyRebindsConfig {
     std::vector<KeyRebind> rebinds;
 };
 struct Config {
-    int configVersion = 2;
+    int configVersion = 3;
     std::vector<MirrorConfig> mirrors;
     std::vector<MirrorGroupConfig> mirrorGroups;
     std::vector<ImageConfig> images;
@@ -505,8 +505,9 @@ struct Config {
     int obsFramerate = ConfigDefaults::CONFIG_OBS_FRAMERATE;
     KeyRebindsConfig keyRebinds;
     AppearanceConfig appearance;
-    int keyRepeatStartDelay = 0;
-    int keyRepeatDelay = 0;
+    int keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
+    int keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
+    bool keyRepeatResumePreviousHeldKey = ConfigDefaults::CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY;
     bool basicModeEnabled = false;
     bool disableFullscreenPrompt = false;
     bool disableConfigurePrompt = false;

@@ -577,66 +577,45 @@ void RestoreWindowsMouseSpeed() {
 }
 
 void SaveOriginalKeyRepeatSettings() {
-    g_originalFilterKeys.cbSize = sizeof(FILTERKEYS);
-    if (SystemParametersInfo(SPI_GETFILTERKEYS, sizeof(FILTERKEYS), &g_originalFilterKeys, 0)) {
-        g_originalFilterKeysCaptured.store(true);
-        LogCategory("init", "Saved original FILTERKEYS: flags=0x" + std::to_string(g_originalFilterKeys.dwFlags) +
-                                ", iDelayMSec=" + std::to_string(g_originalFilterKeys.iDelayMSec) +
-                                ", iRepeatMSec=" + std::to_string(g_originalFilterKeys.iRepeatMSec));
-    } else {
-        Log("WARNING: Failed to get current FILTERKEYS settings");
-        g_originalFilterKeys.dwFlags = 0;
-        g_originalFilterKeys.iDelayMSec = 0;
-        g_originalFilterKeys.iRepeatMSec = 0;
-        g_originalFilterKeysCaptured.store(false);
-    }
-}
+    UINT keyboardDelay = 0;
+    UINT keyboardSpeed = 31;
+    const bool gotDelay = SystemParametersInfo(SPI_GETKEYBOARDDELAY, 0, &keyboardDelay, 0) != FALSE;
+    const bool gotSpeed = SystemParametersInfo(SPI_GETKEYBOARDSPEED, 0, &keyboardSpeed, 0) != FALSE;
 
-void ApplyKeyRepeatSettings() {
-    if (!g_originalFilterKeysCaptured.load(std::memory_order_acquire)) { SaveOriginalKeyRepeatSettings(); }
-
-    int startDelay = g_config.keyRepeatStartDelay;
-    int repeatDelay = g_config.keyRepeatDelay;
-
-    if (startDelay == 0 && repeatDelay == 0) {
-        if (g_filterKeysApplied.load()) {
-            if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &g_originalFilterKeys, 0)) {
-                Log("Restored original FILTERKEYS settings");
-            }
-            g_filterKeysApplied.store(false);
-        }
+    if (!gotDelay || !gotSpeed) {
+        Log("WARNING: Failed to query current keyboard repeat settings");
         return;
     }
 
-    if (startDelay < 0) startDelay = 0;
-    if (startDelay > 500) startDelay = 500;
-    if (repeatDelay < 0) repeatDelay = 0;
+    LogCategory("init", "Saved current keyboard repeat settings: delayIndex=" + std::to_string(keyboardDelay) +
+                            ", speedIndex=" + std::to_string(keyboardSpeed));
+}
+
+void ApplyKeyRepeatSettings() {
+    int startDelay = g_config.keyRepeatStartDelay;
+    int repeatDelay = g_config.keyRepeatDelay;
+
+    if (startDelay >= 0) {
+        if (startDelay < 50) startDelay = 50;
+        if (startDelay > 500) startDelay = 500;
+    }
+    if (repeatDelay < -1) repeatDelay = -1;
     if (repeatDelay > 500) repeatDelay = 500;
 
-    FILTERKEYS fk = { sizeof(FILTERKEYS) };
-    fk.dwFlags = FKF_FILTERKEYSON;
-    fk.iWaitMSec = 0;
-    fk.iDelayMSec = (startDelay > 0) ? startDelay : g_originalFilterKeys.iDelayMSec;
-    fk.iRepeatMSec = (repeatDelay > 0) ? repeatDelay : g_originalFilterKeys.iRepeatMSec;
-    fk.iBounceMSec = 0;
-
-    if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &fk, 0)) {
-        g_filterKeysApplied.store(true);
-        Log("Applied key repeat settings: startDelay=" + std::to_string(fk.iDelayMSec) +
-            "ms, repeatDelay=" + std::to_string(fk.iRepeatMSec) + "ms");
-    } else {
-        Log("WARNING: Failed to set key repeat settings");
+    HWND subclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+    if (subclassedHwnd != NULL) {
+        (void)PostMessage(subclassedHwnd, WM_TOOLSCREEN_REFRESH_KEY_REPEAT, 0, 0);
     }
+
+    const std::string startDelayText = (startDelay < 0) ? std::string("default") : std::to_string(startDelay) + "ms";
+    const std::string repeatDelayText = (repeatDelay < 0) ? std::string("default") : std::to_string(repeatDelay) + "ms";
+    Log("Applied local key repeat settings: startDelay=" + startDelayText + ", repeatDelay=" + repeatDelayText);
 }
 
 void RestoreKeyRepeatSettings() {
-    if (g_filterKeysApplied.load()) {
-        if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &g_originalFilterKeys, 0)) {
-            Log("Restored original FILTERKEYS settings");
-        } else {
-            Log("WARNING: Failed to restore FILTERKEYS settings");
-        }
-        g_filterKeysApplied.store(false);
+    HWND subclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+    if (subclassedHwnd != NULL) {
+        (void)PostMessage(subclassedHwnd, WM_TOOLSCREEN_REFRESH_KEY_REPEAT, 0, 0);
     }
 }
 

@@ -241,7 +241,9 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
             ImGui::Text(trc("inputs.key_repeat_start_delay"));
             ImGui::SetNextItemWidth(600);
             int startDelayValue = g_config.keyRepeatStartDelay;
-            if (ImGui::SliderInt("##keyRepeatStartDelay", &startDelayValue, 0, 500, startDelayValue == 0 ? trc("label.default") : "%d ms")) {
+            if (ImGui::SliderInt("##keyRepeatStartDelay", &startDelayValue, -1, 500,
+                                 startDelayValue < 0 ? trc("label.default") : "%d ms")) {
+                if (startDelayValue >= 0 && startDelayValue < 50) startDelayValue = 50;
                 g_config.keyRepeatStartDelay = startDelayValue;
                 g_configIsDirty = true;
                 ApplyKeyRepeatSettings();
@@ -252,13 +254,21 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
             ImGui::Text(trc("inputs.key_repeat_delay"));
             ImGui::SetNextItemWidth(600);
             int repeatDelayValue = g_config.keyRepeatDelay;
-            if (ImGui::SliderInt("##keyRepeatDelay", &repeatDelayValue, 0, 500, repeatDelayValue == 0 ? trc("label.default") : "%d ms")) {
+            if (ImGui::SliderInt("##keyRepeatDelay", &repeatDelayValue, -1, 500,
+                                 repeatDelayValue < 0 ? trc("label.default") : "%d ms")) {
                 g_config.keyRepeatDelay = repeatDelayValue;
                 g_configIsDirty = true;
                 ApplyKeyRepeatSettings();
             }
             ImGui::SameLine();
             HelpMarker(trc("inputs.tooltip.key_repeat_delay"));
+
+            if (ImGui::Checkbox(trc("inputs.key_repeat_resume_previous"), &g_config.keyRepeatResumePreviousHeldKey)) {
+                g_configIsDirty = true;
+                ApplyKeyRepeatSettings();
+            }
+            ImGui::SameLine();
+            HelpMarker(trc("inputs.tooltip.key_repeat_resume_previous"));
 
             ImGui::Spacing();
 

@@ -1679,6 +1679,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("limitCaptureFramerate", config.limitCaptureFramerate);
     out.insert("keyRepeatStartDelay", config.keyRepeatStartDelay);
     out.insert("keyRepeatDelay", config.keyRepeatDelay);
+    out.insert("keyRepeatResumePreviousHeldKey", config.keyRepeatResumePreviousHeldKey);
     out.insert("basicModeEnabled", config.basicModeEnabled);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
     out.insert("disableConfigurePrompt", config.disableConfigurePrompt);
@@ -1787,6 +1788,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
 
 void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.configVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
+    const bool legacyPreV3Config = config.configVersion < 3;
     config.disableHookChaining = GetOr(tbl, "disableHookChaining", ConfigDefaults::CONFIG_DISABLE_HOOK_CHAINING);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
     config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
@@ -1804,6 +1806,19 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.obsFramerate = ClampObsFramerateConfigValue(GetOr(tbl, "obsFramerate", ConfigDefaults::CONFIG_OBS_FRAMERATE));
     config.keyRepeatStartDelay = GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY);
     config.keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
+    if (legacyPreV3Config) {
+        if (config.keyRepeatStartDelay == 0) {
+            config.keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
+        } else if (config.keyRepeatStartDelay > 0 && config.keyRepeatStartDelay < 50) {
+            config.keyRepeatStartDelay = 50;
+        }
+
+        if (config.keyRepeatDelay == 0) {
+            config.keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
+        }
+    }
+    config.keyRepeatResumePreviousHeldKey =
+        GetOr(tbl, "keyRepeatResumePreviousHeldKey", ConfigDefaults::CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY);
     config.basicModeEnabled = GetOr(tbl, "basicModeEnabled", ConfigDefaults::CONFIG_BASIC_MODE_ENABLED);
     config.disableFullscreenPrompt = GetOr(tbl, "disableFullscreenPrompt", ConfigDefaults::CONFIG_DISABLE_FULLSCREEN_PROMPT);
     config.disableConfigurePrompt = GetOr(tbl, "disableConfigurePrompt", ConfigDefaults::CONFIG_DISABLE_CONFIGURE_PROMPT);
@@ -1970,6 +1985,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "limitCaptureFramerate",
                                                  "keyRepeatStartDelay",
                                                  "keyRepeatDelay",
+                                                 "keyRepeatResumePreviousHeldKey",
                                                  "basicModeEnabled",
                                                  "disableFullscreenPrompt",
                                                  "disableConfigurePrompt",

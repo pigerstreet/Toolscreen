@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -67,6 +68,7 @@ static std::atomic<ULONGLONG> s_cachedSystemCursorVisibilityTick{ 0 };
 static HHOOK s_lowLevelKeyboardHook = NULL;
 static std::mutex s_lowLevelKeyboardHookMutex;
 static std::atomic<bool> s_deferredFocusRegainWmSizePending{ false };
+static constexpr UINT_PTR kToolscreenKeyRepeatTimerId = 0x54535250;
 
 struct LowLevelSuppressedKeyState {
     DWORD rawVk = 0;
@@ -74,8 +76,434 @@ struct LowLevelSuppressedKeyState {
     bool isSystemKey = false;
 };
 
+struct LocalKeyRepeatState {
+    DWORD rawVk = 0;
+    WPARAM keyWParam = 0;
+    UINT keyMsg = 0;
+    UINT scanCodeWithFlags = 0;
+    uint64_t pressSequence = 0;
+    std::chrono::steady_clock::time_point initialPressTime{};
+    std::chrono::steady_clock::time_point nextRepeatTime{};
+    bool hasCharacterMessage = false;
+    UINT charMsg = 0;
+    WPARAM charWParam = 0;
+    UINT charScanCodeWithFlags = 0;
+};
+
+static bool IsModifierVk(DWORD vk);
+static LPARAM BuildKeyboardMessageLParam(UINT scanCodeWithFlags, bool isKeyDown, bool isSystemKey, UINT repeatCount,
+                                         bool previousKeyState, bool transitionState);
+static std::chrono::steady_clock::time_point ResolveNextRepeatTimeFromPress(const std::chrono::steady_clock::time_point& initialPressTime);
+
 static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_lowLevelSuppressedKeys;
 static std::mutex s_lowLevelSuppressedKeysMutex;
+static std::unordered_map<uint64_t, LocalKeyRepeatState> s_localKeyRepeatStates;
+static std::optional<uint64_t> s_localKeyRepeatActiveId;
+static uint64_t s_localKeyRepeatPressSequence = 0;
+
+static UINT GetScanCodeWithExtendedFlagFromLParam(LPARAM lParam) {
+    UINT scanCodeWithFlags = static_cast<UINT>((lParam >> 16) & 0xFF);
+    if ((lParam & (1LL << 24)) != 0) {
+        scanCodeWithFlags |= 0xE000;
+    }
+    return scanCodeWithFlags;
+}
+
+static uint64_t MakeLocalKeyRepeatId(DWORD rawVk, UINT scanCodeWithFlags) {
+    return (static_cast<uint64_t>(rawVk) << 32) | static_cast<uint64_t>(scanCodeWithFlags);
+}
+
+static LocalKeyRepeatState* FindActiveLocalKeyRepeatState() {
+    if (!s_localKeyRepeatActiveId.has_value()) return nullptr;
+
+    auto it = s_localKeyRepeatStates.find(*s_localKeyRepeatActiveId);
+    if (it == s_localKeyRepeatStates.end()) {
+        s_localKeyRepeatActiveId.reset();
+        return nullptr;
+    }
+
+    return &it->second;
+}
+
+static void ResetLocalKeyRepeatSchedule(LocalKeyRepeatState& state) {
+    state.initialPressTime = std::chrono::steady_clock::now();
+    if (state.hasCharacterMessage) {
+        state.nextRepeatTime = ResolveNextRepeatTimeFromPress(state.initialPressTime);
+    }
+}
+
+static void SetActiveLocalKeyRepeatState(uint64_t repeatId, bool restartDelay) {
+    auto it = s_localKeyRepeatStates.find(repeatId);
+    if (it == s_localKeyRepeatStates.end()) {
+        s_localKeyRepeatActiveId.reset();
+        return;
+    }
+
+    s_localKeyRepeatActiveId = repeatId;
+    if (restartDelay) {
+        ResetLocalKeyRepeatSchedule(it->second);
+    }
+}
+
+static void ActivateMostRecentHeldLocalKeyRepeatState() {
+    uint64_t bestRepeatId = 0;
+    uint64_t bestSequence = 0;
+    bool found = false;
+
+    for (const auto& [repeatId, state] : s_localKeyRepeatStates) {
+        if (!found || state.pressSequence > bestSequence) {
+            bestRepeatId = repeatId;
+            bestSequence = state.pressSequence;
+            found = true;
+        }
+    }
+
+    if (!found) {
+        s_localKeyRepeatActiveId.reset();
+        return;
+    }
+
+    SetActiveLocalKeyRepeatState(bestRepeatId, true);
+}
+
+static bool IsCharacterRepeatMessage(UINT uMsg) {
+    switch (uMsg) {
+    case WM_CHAR:
+    case WM_SYSCHAR:
+    case WM_DEADCHAR:
+    case WM_SYSDEADCHAR:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static UINT ResolveSystemKeyboardStartDelayMs() {
+    UINT keyboardDelay = 0;
+    if (!SystemParametersInfo(SPI_GETKEYBOARDDELAY, 0, &keyboardDelay, 0)) {
+        return 500;
+    }
+
+    if (keyboardDelay > 3) keyboardDelay = 3;
+    return (keyboardDelay + 1) * 250;
+}
+
+static UINT ResolveSystemKeyboardRepeatIntervalMs() {
+    UINT keyboardSpeed = 31;
+    if (!SystemParametersInfo(SPI_GETKEYBOARDSPEED, 0, &keyboardSpeed, 0)) {
+        return 33;
+    }
+
+    if (keyboardSpeed > 31) keyboardSpeed = 31;
+
+    const double charsPerSecond = 2.5 + (27.5 * (static_cast<double>(keyboardSpeed) / 31.0));
+    const UINT intervalMs = static_cast<UINT>(std::lround(1000.0 / charsPerSecond));
+    return intervalMs == 0 ? 1 : intervalMs;
+}
+
+static UINT ResolveConfiguredKeyRepeatStartDelayMs() {
+    int configuredDelay = g_config.keyRepeatStartDelay;
+    if (configuredDelay >= 0) {
+        if (configuredDelay < 50) configuredDelay = 50;
+        if (configuredDelay > 500) configuredDelay = 500;
+        return static_cast<UINT>(configuredDelay);
+    }
+    return ResolveSystemKeyboardStartDelayMs();
+}
+
+static UINT ResolveConfiguredKeyRepeatIntervalMs() {
+    int configuredDelay = g_config.keyRepeatDelay;
+    if (configuredDelay >= 0) {
+        if (configuredDelay < 0) configuredDelay = 0;
+        if (configuredDelay > 500) configuredDelay = 500;
+        return static_cast<UINT>(configuredDelay);
+    }
+    return ResolveSystemKeyboardRepeatIntervalMs();
+}
+
+static std::chrono::steady_clock::time_point ResolveNextRepeatTimeFromPress(const std::chrono::steady_clock::time_point& initialPressTime) {
+    using Clock = std::chrono::steady_clock;
+
+    const Clock::time_point now = Clock::now();
+    const auto startDelay = std::chrono::milliseconds(ResolveConfiguredKeyRepeatStartDelayMs());
+    const UINT repeatIntervalMs = ResolveConfiguredKeyRepeatIntervalMs();
+
+    Clock::time_point nextRepeatTime = initialPressTime + startDelay;
+    if (nextRepeatTime > now) {
+        return nextRepeatTime;
+    }
+
+    if (repeatIntervalMs == 0) {
+        return now;
+    }
+
+    const auto repeatInterval = std::chrono::milliseconds(repeatIntervalMs);
+
+    const auto elapsed = now - nextRepeatTime;
+    const auto intervalCount = elapsed / repeatInterval;
+    nextRepeatTime += repeatInterval * (intervalCount + 1);
+    return nextRepeatTime;
+}
+
+static void UpdateLocalKeyRepeatTimer(HWND hWnd) {
+    if (!hWnd) return;
+
+    using Clock = std::chrono::steady_clock;
+
+    const LocalKeyRepeatState* activeState = FindActiveLocalKeyRepeatState();
+    if (!activeState || !activeState->hasCharacterMessage) {
+        KillTimer(hWnd, kToolscreenKeyRepeatTimerId);
+        return;
+    }
+
+    const Clock::time_point now = Clock::now();
+    UINT dueMs = 1;
+    if (activeState->nextRepeatTime > now) {
+        const auto waitDuration = std::chrono::duration_cast<std::chrono::milliseconds>(activeState->nextRepeatTime - now);
+        dueMs = static_cast<UINT>(waitDuration.count());
+        if (dueMs == 0) dueMs = 1;
+    }
+
+    SetTimer(hWnd, kToolscreenKeyRepeatTimerId, dueMs, NULL);
+}
+
+static void ClearLocalKeyRepeatStates(HWND hWnd) {
+    s_localKeyRepeatStates.clear();
+    s_localKeyRepeatActiveId.reset();
+    s_localKeyRepeatPressSequence = 0;
+    if (hWnd) {
+        KillTimer(hWnd, kToolscreenKeyRepeatTimerId);
+    }
+}
+
+static void RefreshLocalKeyRepeatSchedule(HWND hWnd) {
+    LocalKeyRepeatState* activeState = FindActiveLocalKeyRepeatState();
+    if (activeState && activeState->hasCharacterMessage) {
+        activeState->nextRepeatTime = ResolveNextRepeatTimeFromPress(activeState->initialPressTime);
+    }
+
+    UpdateLocalKeyRepeatTimer(hWnd);
+}
+
+static LocalKeyRepeatState* FindLocalKeyRepeatState(DWORD rawVk, UINT scanCodeWithFlags) {
+    const uint64_t repeatId = MakeLocalKeyRepeatId(rawVk, scanCodeWithFlags);
+    auto it = s_localKeyRepeatStates.find(repeatId);
+    if (it == s_localKeyRepeatStates.end()) return nullptr;
+    return &it->second;
+}
+
+static LocalKeyRepeatState* FindLocalKeyRepeatStateForCharMessage(LPARAM lParam) {
+    const UINT scanCodeWithFlags = GetScanCodeWithExtendedFlagFromLParam(lParam);
+    for (auto& [repeatId, state] : s_localKeyRepeatStates) {
+        (void)repeatId;
+        if (state.scanCodeWithFlags == scanCodeWithFlags) {
+            return &state;
+        }
+    }
+    return nullptr;
+}
+
+static void TrackInitialLocalKeyRepeatKeyDown(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_KEYDOWN && uMsg != WM_SYSKEYDOWN) return;
+
+    const DWORD rawVk = static_cast<DWORD>(wParam);
+    if (rawVk == 0 || IsModifierVk(rawVk)) return;
+
+    const UINT scanCodeWithFlags = GetScanCodeWithExtendedFlagFromLParam(lParam);
+    if (FindLocalKeyRepeatState(rawVk, scanCodeWithFlags) != nullptr) {
+        return;
+    }
+
+    LocalKeyRepeatState state{};
+    state.rawVk = rawVk;
+    state.keyWParam = wParam;
+    state.keyMsg = uMsg;
+    state.scanCodeWithFlags = scanCodeWithFlags;
+    state.pressSequence = ++s_localKeyRepeatPressSequence;
+    state.initialPressTime = std::chrono::steady_clock::now();
+
+    const uint64_t repeatId = MakeLocalKeyRepeatId(rawVk, state.scanCodeWithFlags);
+    s_localKeyRepeatStates[repeatId] = state;
+    SetActiveLocalKeyRepeatState(repeatId, false);
+    UpdateLocalKeyRepeatTimer(hWnd);
+}
+
+static void ReleaseLocalKeyRepeatKey(HWND hWnd, WPARAM wParam, LPARAM lParam) {
+    const DWORD rawVk = static_cast<DWORD>(wParam);
+    const UINT scanCodeWithFlags = GetScanCodeWithExtendedFlagFromLParam(lParam);
+    const uint64_t repeatId = MakeLocalKeyRepeatId(rawVk, scanCodeWithFlags);
+    const bool wasActive = s_localKeyRepeatActiveId.has_value() && *s_localKeyRepeatActiveId == repeatId;
+
+    s_localKeyRepeatStates.erase(repeatId);
+    if (wasActive) {
+        if (g_config.keyRepeatResumePreviousHeldKey) {
+            ActivateMostRecentHeldLocalKeyRepeatState();
+        } else {
+            s_localKeyRepeatActiveId.reset();
+        }
+    }
+    UpdateLocalKeyRepeatTimer(hWnd);
+}
+
+static void TrackInitialLocalCharacterMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (!IsCharacterRepeatMessage(uMsg)) return;
+
+    LocalKeyRepeatState* state = FindLocalKeyRepeatStateForCharMessage(lParam);
+    if (!state) return;
+    if (state->hasCharacterMessage) return;
+
+    state->hasCharacterMessage = true;
+    state->charMsg = uMsg;
+    state->charWParam = wParam;
+    state->charScanCodeWithFlags = GetScanCodeWithExtendedFlagFromLParam(lParam);
+    if (s_localKeyRepeatActiveId.has_value() && *s_localKeyRepeatActiveId == MakeLocalKeyRepeatId(state->rawVk, state->scanCodeWithFlags)) {
+        state->nextRepeatTime = ResolveNextRepeatTimeFromPress(state->initialPressTime);
+    }
+    UpdateLocalKeyRepeatTimer(hWnd);
+}
+
+static bool ShouldSuppressOsAutoRepeatKeyMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_KEYDOWN && uMsg != WM_SYSKEYDOWN) return false;
+
+    const DWORD rawVk = static_cast<DWORD>(wParam);
+    const UINT scanCodeWithFlags = GetScanCodeWithExtendedFlagFromLParam(lParam);
+    const LocalKeyRepeatState* state = FindLocalKeyRepeatState(rawVk, scanCodeWithFlags);
+    if (!state) return false;
+
+    const bool hasRepeatBit = (lParam & (1LL << 30)) != 0;
+    return hasRepeatBit || state->hasCharacterMessage;
+}
+
+static bool ShouldSuppressOsAutoRepeatCharMessage(UINT uMsg, LPARAM lParam) {
+    if (!IsCharacterRepeatMessage(uMsg)) return false;
+
+    const LocalKeyRepeatState* state = FindLocalKeyRepeatStateForCharMessage(lParam);
+    if (!state || !state->hasCharacterMessage) return false;
+
+    const bool hasRepeatBit = (lParam & (1LL << 30)) != 0;
+    return hasRepeatBit || state->hasCharacterMessage;
+}
+
+static LRESULT ForwardLocalRepeatKeyMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    InputHandlerResult result = HandleImGuiInput(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    result = HandleWindowOverlayKeyboard(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    result = HandleGuiInputBlocking(uMsg);
+    if (result.consumed) return result.result;
+
+    result = HandleKeyRebinding(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    if (g_originalWndProc) { return CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam); }
+    return DefWindowProc(hWnd, uMsg, wParam, lParam);
+}
+
+static LRESULT ForwardLocalRepeatCharMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    HandleCharLogging(uMsg, wParam, lParam);
+
+    InputHandlerResult result = HandleImGuiInput(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    result = HandleGuiInputBlocking(uMsg);
+    if (result.consumed) return result.result;
+
+    if (uMsg == WM_CHAR) {
+        result = HandleCharRebinding(hWnd, uMsg, wParam, lParam);
+        if (result.consumed) return result.result;
+    }
+
+    if (g_originalWndProc) { return CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam); }
+    return DefWindowProc(hWnd, uMsg, wParam, lParam);
+}
+
+static InputHandlerResult HandleLocalKeyRepeatMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        if (ShouldSuppressOsAutoRepeatKeyMessage(uMsg, wParam, lParam)) {
+            return { true, 0 };
+        }
+        TrackInitialLocalKeyRepeatKeyDown(hWnd, uMsg, wParam, lParam);
+        return { false, 0 };
+
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        ReleaseLocalKeyRepeatKey(hWnd, wParam, lParam);
+        return { false, 0 };
+
+    case WM_CHAR:
+    case WM_SYSCHAR:
+    case WM_DEADCHAR:
+    case WM_SYSDEADCHAR:
+        if (ShouldSuppressOsAutoRepeatCharMessage(uMsg, lParam)) {
+            return { true, 0 };
+        }
+        TrackInitialLocalCharacterMessage(hWnd, uMsg, wParam, lParam);
+        return { false, 0 };
+
+    case WM_TIMER:
+        if (wParam != kToolscreenKeyRepeatTimerId) return { false, 0 };
+        break;
+
+    case WM_TOOLSCREEN_REFRESH_KEY_REPEAT:
+        RefreshLocalKeyRepeatSchedule(hWnd);
+        return { true, 0 };
+
+    default:
+        return { false, 0 };
+    }
+
+    using Clock = std::chrono::steady_clock;
+
+    struct PendingRepeatMessage {
+        UINT keyMsg = 0;
+        WPARAM keyWParam = 0;
+        LPARAM keyLParam = 0;
+        UINT charMsg = 0;
+        WPARAM charWParam = 0;
+        LPARAM charLParam = 0;
+    };
+
+    std::vector<PendingRepeatMessage> pendingRepeats;
+
+    const Clock::time_point now = Clock::now();
+    LocalKeyRepeatState* activeState = FindActiveLocalKeyRepeatState();
+    if (activeState && activeState->hasCharacterMessage && activeState->nextRepeatTime <= now) {
+        const bool isSystemKey = (activeState->keyMsg == WM_SYSKEYDOWN);
+        PendingRepeatMessage pending{};
+        pending.keyMsg = activeState->keyMsg;
+        pending.keyWParam = activeState->keyWParam;
+        pending.keyLParam = BuildKeyboardMessageLParam(activeState->scanCodeWithFlags, true, isSystemKey, 1, true, false);
+
+        const bool isSystemChar = (activeState->charMsg == WM_SYSCHAR || activeState->charMsg == WM_SYSDEADCHAR);
+        pending.charMsg = activeState->charMsg;
+        pending.charWParam = activeState->charWParam;
+        pending.charLParam = BuildKeyboardMessageLParam(activeState->charScanCodeWithFlags, true, isSystemChar, 1, true, false);
+        pendingRepeats.push_back(pending);
+
+        const UINT repeatIntervalMs = ResolveConfiguredKeyRepeatIntervalMs();
+        if (repeatIntervalMs == 0) {
+            activeState->nextRepeatTime = Clock::now();
+        } else {
+            activeState->nextRepeatTime += std::chrono::milliseconds(repeatIntervalMs);
+            while (activeState->nextRepeatTime <= now) {
+                activeState->nextRepeatTime += std::chrono::milliseconds(repeatIntervalMs);
+            }
+        }
+    }
+
+    UpdateLocalKeyRepeatTimer(hWnd);
+
+    for (const PendingRepeatMessage& pending : pendingRepeats) {
+        (void)ForwardLocalRepeatKeyMessage(hWnd, pending.keyMsg, pending.keyWParam, pending.keyLParam);
+        (void)ForwardLocalRepeatCharMessage(hWnd, pending.charMsg, pending.charWParam, pending.charLParam);
+    }
+
+    return { true, 0 };
+}
 
 static bool QuerySystemCursorVisibleCached() {
     constexpr ULONGLONG kCursorVisibilityRefreshMs = 50;
@@ -567,6 +995,7 @@ InputHandlerResult HandleDestroy(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     if (uMsg != WM_DESTROY) { return { false, 0 }; }
     PROFILE_SCOPE("HandleDestroy");
 
+    ClearLocalKeyRepeatStates(hWnd);
     ReleaseActiveLowLevelRebindKeys(hWnd);
 
     extern GameVersion g_gameVersion;
@@ -1145,6 +1574,7 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     if (becameInactive) {
         ImGuiInputQueue_EnqueueFocus(false);
 
+        ClearLocalKeyRepeatStates(hWnd);
         ReleaseActiveLowLevelRebindKeys(hWnd);
 
         if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) {
@@ -2894,6 +3324,9 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (result.consumed) return result.result;
 
     if (g_isShuttingDown.load()) { return CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam); }
+
+    result = HandleLocalKeyRepeatMessages(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
 
     result = HandleImGuiInput(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
