@@ -43,11 +43,10 @@ static const std::vector<CursorDef> SYSTEM_CURSORS = { { "Arrow", L"C:/Windows/C
 
 static std::vector<CursorDef> AVAILABLE_CURSORS;
 static bool g_cursorDefsInitialized = false;
+static std::mutex g_cursorDefsMutex;
 
-void InitializeCursorDefinitions() {
-    if (g_cursorDefsInitialized) return;
-
-    LogCategory("cursor_textures", "[CursorTextures] InitializeCursorDefinitions starting...");
+static void ScanCursorDefinitionsLocked() {
+    LogCategory("cursor_textures", "[CursorTextures] ScanCursorDefinitionsLocked starting...");
 
     AVAILABLE_CURSORS = SYSTEM_CURSORS;
     LogCategory("cursor_textures", "[CursorTextures] Loaded " + std::to_string(SYSTEM_CURSORS.size()) + " system cursor definitions");
@@ -67,7 +66,6 @@ void InitializeCursorDefinitions() {
         std::wstring toolscreenPath = GetToolscreenPath();
         if (toolscreenPath.empty()) {
             LogCategory("cursor_textures", "[CursorTextures] ERROR: Failed to get toolscreen path - custom cursors will not be available");
-            g_cursorDefsInitialized = true;
             return;
         }
 
@@ -111,8 +109,23 @@ void InitializeCursorDefinitions() {
         LogCategory("cursor_textures", "[CursorTextures] ERROR: Exception scanning cursors folder: " + std::string(e.what()));
     } catch (...) { LogCategory("cursor_textures", "[CursorTextures] ERROR: Unknown exception scanning cursors folder"); }
 
-    LogCategory("cursor_textures", "[CursorTextures] InitializeCursorDefinitions complete. Total cursors available: " +
+    LogCategory("cursor_textures", "[CursorTextures] ScanCursorDefinitionsLocked complete. Total cursors available: " +
                                        std::to_string(AVAILABLE_CURSORS.size()));
+}
+
+void InitializeCursorDefinitions() {
+    std::lock_guard<std::mutex> lock(g_cursorDefsMutex);
+    if (g_cursorDefsInitialized) return;
+
+    LogCategory("cursor_textures", "[CursorTextures] InitializeCursorDefinitions starting...");
+    ScanCursorDefinitionsLocked();
+    g_cursorDefsInitialized = true;
+}
+
+void RefreshCursorDefinitions() {
+    std::lock_guard<std::mutex> lock(g_cursorDefsMutex);
+    LogCategory("cursor_textures", "[CursorTextures] RefreshCursorDefinitions starting...");
+    ScanCursorDefinitionsLocked();
     g_cursorDefsInitialized = true;
 }
 
@@ -501,12 +514,18 @@ void LoadCursorTextures() {
 
     InitializeCursorDefinitions();
 
+    std::vector<CursorDef> cursorDefs;
+    {
+        std::lock_guard<std::mutex> defsLock(g_cursorDefsMutex);
+        cursorDefs = AVAILABLE_CURSORS;
+    }
+
     LogCategory("cursor_textures", "[CursorTextures] LoadCursorTextures called - loading initial cursors at default size (64px)");
 
     int totalLoaded = 0;
     const int defaultSize = 64;
 
-    for (const auto& cursorDef : AVAILABLE_CURSORS) {
+    for (const auto& cursorDef : cursorDefs) {
         CursorData cursorData;
         if (LoadSingleCursor(cursorDef.path, cursorDef.loadType, defaultSize, cursorData)) {
             g_cursorList.push_back(cursorData);
@@ -853,6 +872,7 @@ const CursorData* GetSelectedCursor(const std::string& gameState, int size) {
 bool GetCursorPathByName(const std::string& cursorName, std::wstring& outPath, UINT& outLoadType) {
     if (!g_cursorDefsInitialized) { InitializeCursorDefinitions(); }
 
+    std::lock_guard<std::mutex> lock(g_cursorDefsMutex);
     const CursorDef* selectedDef = nullptr;
     for (const auto& def : AVAILABLE_CURSORS) {
         if (def.name == cursorName) {
@@ -886,6 +906,8 @@ bool GetCursorPathByName(const std::string& cursorName, std::wstring& outPath, U
 
 bool IsCursorFileValid(const std::string& cursorName) {
     if (!g_cursorDefsInitialized) { InitializeCursorDefinitions(); }
+
+    std::lock_guard<std::mutex> lock(g_cursorDefsMutex);
 
     if (cursorName.empty()) {
         LogCategory("cursor_textures", "[CursorTextures] IsCursorFileValid: Empty cursor name provided");
@@ -958,6 +980,7 @@ void Cleanup() {
 std::vector<std::string> GetAvailableCursorNames() {
     if (!g_cursorDefsInitialized) { InitializeCursorDefinitions(); }
 
+    std::lock_guard<std::mutex> lock(g_cursorDefsMutex);
     std::vector<std::string> names;
     for (const auto& cursor : AVAILABLE_CURSORS) { names.push_back(cursor.name); }
     return names;

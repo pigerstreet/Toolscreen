@@ -2,7 +2,7 @@
 
 // Thread-safe input queue for Dear ImGui.
 // Producer: Win32 window thread (SubclassedWndProc / input_hook.cpp)
-// Consumer: render thread (render_thread.cpp) where ImGui context lives.
+// Consumer: the render path thread where the ImGui context lives.
 // Goal: avoid *any* ImGui calls from non-render threads.
 
 #include <Windows.h>

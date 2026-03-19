@@ -1,23 +1,27 @@
 ﻿#include "gui.h"
 #include "gui_internal.h"
 #include "config/config_toml.h"
-#include "common/expression_parser.h"
+#include "common/mode_dimensions.h"
 #include "features/fake_cursor.h"
+#include "imgui_cache.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
+#include "imgui_input_queue.h"
 #include "imgui_stdlib.h"
 #include "runtime/logic_thread.h"
 #include "render/mirror_thread.h"
 #include "common/profiler.h"
+#include "render/obs_thread.h"
 #include "render/render.h"
-#include "render/render_thread.h"
 #include "platform/resource.h"
 #include <nlohmann/json.hpp>
 #include "common/i18n.h"
 #include "third_party/stb_image.h"
 #include "common/utils.h"
+#include "features/browser_overlay.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
+#include "hooks/input_hook.h"
 
 #include <GL/glew.h>
 #include <ShlObj.h>
@@ -38,6 +42,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <unordered_map>
 #include <winhttp.h>
 #include <windowsx.h>
@@ -57,13 +62,50 @@ static constexpr float spinnerHoldInterval = 0.01f;
 ImFont* g_keyboardLayoutPrimaryFont = nullptr;
 ImFont* g_keyboardLayoutSecondaryFont = nullptr;
 
-static std::atomic<bool> g_wasCursorVisible{ true };
-
 #define SliderFloat SliderFloatDoubleClickInput
 #define SliderInt SliderIntDoubleClickInput
 
 // This function MUST be defined before the JSON serialization functions that call it
 EyeZoomConfig GetDefaultEyeZoomConfig() { return GetDefaultEyeZoomConfigFromEmbedded(); }
+
+namespace {
+
+void ResetGuiTransientInteractionState() {
+    g_currentlyEditingMirror = "";
+    g_imageDragMode.store(false);
+    g_windowOverlayDragMode.store(false);
+
+    s_hoveredImageName = "";
+    s_draggedImageName = "";
+    s_isDragging = false;
+
+    s_hoveredWindowOverlayName = "";
+    s_draggedWindowOverlayName = "";
+    s_isWindowOverlayDragging = false;
+}
+
+void CloseSettingsGuiWindow() {
+    g_showGui = false;
+    InvalidateImGuiCache();
+
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    ImGuiInputQueue_Clear();
+    ImGuiInputQueue_ResetMouseCapture(hwnd);
+
+    if (!g_wasCursorVisible.load(std::memory_order_acquire)) {
+        RECT clipRect{};
+        if (GetWindowClientRectInScreen(hwnd, clipRect)) {
+            ClipCursor(&clipRect);
+        } else {
+            ClipCursor(NULL);
+        }
+        SetCursor(NULL);
+    }
+
+    ResetGuiTransientInteractionState();
+}
+
+}
 
 void RenderConfigErrorGUI() {
     ImGuiIO& io = ImGui::GetIO();
@@ -131,7 +173,6 @@ void RenderConfigErrorGUI() {
 }
 
 void RenderSettingsGUI() {
-    PROFILE_SCOPE_CAT("Settings GUI Rendering", "ImGui");
     ResetTransientBindingUiState();
 
     static const std::vector<std::pair<const char*, const char*>>
@@ -170,6 +211,7 @@ void RenderSettingsGUI() {
     };
 
     static std::vector<DWORD> s_bindingKeys;
+    static std::unordered_set<DWORD> s_bindingKeySet;
     static bool s_hadKeysPressed = false;
     static std::set<DWORD> s_preHeldKeys;
     static bool s_bindingInitialized = false;
@@ -202,6 +244,8 @@ void RenderSettingsGUI() {
 
     if (is_binding) {
         if (!s_bindingInitialized) {
+            s_bindingKeys.reserve(8);
+            s_bindingKeySet.reserve(8);
             s_preHeldKeys.clear();
             for (int vk = 1; vk < 0xFF; ++vk) {
                 if (GetAsyncKeyState(vk) & 0x8000) {
@@ -213,6 +257,7 @@ void RenderSettingsGUI() {
         ImGui::OpenPopup(trc("hotkeys.bind_hotkey"));
     } else {
         s_bindingKeys.clear();
+        s_bindingKeySet.clear();
         s_hadKeysPressed = false;
         s_preHeldKeys.clear();
         s_bindingInitialized = false;
@@ -246,6 +291,7 @@ void RenderSettingsGUI() {
                 if (!conflict.empty()) {
                     s_hotkeyConflictMessage = "Already assigned to " + conflict;
                     s_bindingKeys.clear();
+                    s_bindingKeySet.clear();
                     s_hadKeysPressed = false;
                     return;
                 }
@@ -287,10 +333,16 @@ void RenderSettingsGUI() {
             }
 
             s_bindingKeys.clear();
+            s_bindingKeySet.clear();
             s_hadKeysPressed = false;
             s_preHeldKeys.clear();
             s_bindingInitialized = false;
             ImGui::CloseCurrentPopup();
+        };
+
+        auto isModifierVk = [](DWORD key) {
+            return key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || key == VK_LCONTROL || key == VK_RCONTROL ||
+                   key == VK_LSHIFT || key == VK_RSHIFT || key == VK_LMENU || key == VK_RMENU;
         };
 
         DWORD capturedVk = 0;
@@ -304,6 +356,7 @@ void RenderSettingsGUI() {
                 s_exclusionToBind = { -1, -1 };
                 s_altHotkeyToBind = { -1, -1 };
                 s_bindingKeys.clear();
+                s_bindingKeySet.clear();
                 s_hadKeysPressed = false;
                 s_preHeldKeys.clear();
                 s_bindingInitialized = false;
@@ -320,6 +373,15 @@ void RenderSettingsGUI() {
                 finalize_bind({});
                 ImGui::EndPopup();
                 return;
+            }
+
+            const bool canAddCapturedKey = !s_preHeldKeys.count(capturedVk) && (capturedIsMouse || !isModifierVk(capturedVk));
+            if (canAddCapturedKey && s_bindingKeySet.insert(capturedVk).second) {
+                s_bindingKeys.push_back(capturedVk);
+            }
+            if (canAddCapturedKey) {
+                if (!s_hadKeysPressed) s_hotkeyConflictMessage.clear();
+                s_hadKeysPressed = true;
             }
         }
 
@@ -341,6 +403,7 @@ void RenderSettingsGUI() {
                 s_exclusionToBind = { -1, -1 };
                 s_altHotkeyToBind = { -1, -1 };
                 s_bindingKeys.clear();
+                s_bindingKeySet.clear();
                 s_hadKeysPressed = false;
                 s_preHeldKeys.clear();
                 s_bindingInitialized = false;
@@ -360,7 +423,11 @@ void RenderSettingsGUI() {
             }
         }
 
-        std::vector<DWORD> currentlyPressed;
+        std::vector<DWORD> currentlyDownKeys;
+        currentlyDownKeys.reserve(8);
+
+        std::vector<DWORD> modifierKeysToInsert;
+        modifierKeysToInsert.reserve(8);
 
         const bool lctrlDown = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
         const bool rctrlDown = (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
@@ -376,12 +443,30 @@ void RenderSettingsGUI() {
         const bool laltPreHeld = s_preHeldKeys.count(VK_LMENU) || s_preHeldKeys.count(VK_MENU);
         const bool raltPreHeld = s_preHeldKeys.count(VK_RMENU) || s_preHeldKeys.count(VK_MENU);
 
-        if (lctrlDown && !lctrlPreHeld) currentlyPressed.push_back(VK_LCONTROL);
-        if (rctrlDown && !rctrlPreHeld) currentlyPressed.push_back(VK_RCONTROL);
-        if (lshiftDown && !lshiftPreHeld) currentlyPressed.push_back(VK_LSHIFT);
-        if (rshiftDown && !rshiftPreHeld) currentlyPressed.push_back(VK_RSHIFT);
-        if (laltDown && !laltPreHeld) currentlyPressed.push_back(VK_LMENU);
-        if (raltDown && !raltPreHeld) currentlyPressed.push_back(VK_RMENU);
+        if (lctrlDown && !lctrlPreHeld) {
+            currentlyDownKeys.push_back(VK_LCONTROL);
+            modifierKeysToInsert.push_back(VK_LCONTROL);
+        }
+        if (rctrlDown && !rctrlPreHeld) {
+            currentlyDownKeys.push_back(VK_RCONTROL);
+            modifierKeysToInsert.push_back(VK_RCONTROL);
+        }
+        if (lshiftDown && !lshiftPreHeld) {
+            currentlyDownKeys.push_back(VK_LSHIFT);
+            modifierKeysToInsert.push_back(VK_LSHIFT);
+        }
+        if (rshiftDown && !rshiftPreHeld) {
+            currentlyDownKeys.push_back(VK_RSHIFT);
+            modifierKeysToInsert.push_back(VK_RSHIFT);
+        }
+        if (laltDown && !laltPreHeld) {
+            currentlyDownKeys.push_back(VK_LMENU);
+            modifierKeysToInsert.push_back(VK_LMENU);
+        }
+        if (raltDown && !raltPreHeld) {
+            currentlyDownKeys.push_back(VK_RMENU);
+            modifierKeysToInsert.push_back(VK_RMENU);
+        }
 
         for (int vk = 1; vk < 0xFF; ++vk) {
             // Skip escape (used for cancel), generic modifiers, and Windows keys
@@ -390,37 +475,29 @@ void RenderSettingsGUI() {
                 continue;
             }
             if (s_preHeldKeys.count(static_cast<DWORD>(vk))) continue;
-            if (GetAsyncKeyState(vk) & 0x8000) { currentlyPressed.push_back(vk); }
+            if (GetAsyncKeyState(vk) & 0x8000) { currentlyDownKeys.push_back(vk); }
         }
 
-        for (DWORD key : currentlyPressed) {
-            if (std::find(s_bindingKeys.begin(), s_bindingKeys.end(), key) == s_bindingKeys.end()) {
-                bool isModifier = (key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || key == VK_LCONTROL || key == VK_RCONTROL ||
-                                   key == VK_LSHIFT || key == VK_RSHIFT || key == VK_LMENU || key == VK_RMENU);
-                if (isModifier) {
-                    auto insertPos = s_bindingKeys.begin();
-                    for (auto it = s_bindingKeys.begin(); it != s_bindingKeys.end(); ++it) {
-                        bool itIsModifier = (*it == VK_CONTROL || *it == VK_SHIFT || *it == VK_MENU || *it == VK_LCONTROL || *it == VK_RCONTROL ||
-                                             *it == VK_LSHIFT || *it == VK_RSHIFT || *it == VK_LMENU || *it == VK_RMENU);
-                        if (!itIsModifier) {
-                            insertPos = it;
-                            break;
-                        }
-                        insertPos = it + 1;
+        for (DWORD key : modifierKeysToInsert) {
+            if (s_bindingKeySet.insert(key).second) {
+                auto insertPos = s_bindingKeys.begin();
+                for (auto it = s_bindingKeys.begin(); it != s_bindingKeys.end(); ++it) {
+                    if (!isModifierVk(*it)) {
+                        insertPos = it;
+                        break;
                     }
-                    s_bindingKeys.insert(insertPos, key);
-                } else {
-                    s_bindingKeys.push_back(key);
+                    insertPos = it + 1;
                 }
+                s_bindingKeys.insert(insertPos, key);
             }
         }
 
-        if (!currentlyPressed.empty()) {
+        if (!currentlyDownKeys.empty()) {
             if (!s_hadKeysPressed) s_hotkeyConflictMessage.clear();
             s_hadKeysPressed = true;
         }
 
-        if (s_hadKeysPressed && currentlyPressed.empty()) {
+        if (s_hadKeysPressed && currentlyDownKeys.empty()) {
             finalize_bind(s_bindingKeys);
             if (s_hotkeyConflictMessage.empty()) {
                 ImGui::EndPopup();
@@ -470,35 +547,12 @@ void RenderSettingsGUI() {
     std::string windowTitle = "Toolscreen v" + GetToolscreenVersionString() + " by jojoe77777";
 
     bool windowOpen = true;
-    if (ImGui::Begin(windowTitle.c_str(), &windowOpen, ImGuiWindowFlags_NoCollapse)) {
-        if (!windowOpen) {
-            g_showGui = false;
-            if (!g_wasCursorVisible.load()) {
-                RECT clipRect{};
-                HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-                if (GetWindowClientRectInScreen(hwnd, clipRect)) {
-                    ClipCursor(&clipRect);
-                } else {
-                    ClipCursor(NULL);
-                }
-                SetCursor(NULL);
-            }
-            g_currentlyEditingMirror = "";
-            g_imageDragMode.store(false);
-            g_windowOverlayDragMode.store(false);
-            extern std::string s_hoveredImageName;
-            extern std::string s_draggedImageName;
-            extern bool s_isDragging;
-            s_hoveredImageName = "";
-            s_draggedImageName = "";
-            s_isDragging = false;
-            extern std::string s_hoveredWindowOverlayName;
-            extern std::string s_draggedWindowOverlayName;
-            extern bool s_isWindowOverlayDragging;
-            s_hoveredWindowOverlayName = "";
-            s_draggedWindowOverlayName = "";
-            s_isWindowOverlayDragging = false;
-        }
+    const bool windowVisible = ImGui::Begin(windowTitle.c_str(), &windowOpen, ImGuiWindowFlags_NoCollapse);
+    if (!windowOpen) {
+        CloseSettingsGuiWindow();
+    }
+
+    if (windowVisible && windowOpen) {
 
         {
             static std::chrono::steady_clock::time_point s_lastScreenshotTime{};
@@ -585,6 +639,7 @@ void RenderSettingsGUI() {
                                 if (g_config.lang != langCode) {
                                     g_config.lang = langCode;
                                     LoadTranslation(langCode);
+                                    RequestDynamicGuiFontRefresh(true);
                                     g_configIsDirty = true;
                                 }
                             }
@@ -712,6 +767,7 @@ void RenderSettingsGUI() {
 #include "tabs/tab_mirrors.inl"
 #include "tabs/tab_images.inl"
 #include "tabs/tab_window_overlays.inl"
+#include "tabs/tab_browser_overlays.inl"
 #include "tabs/tab_hotkeys.inl"
 #include "tabs/tab_inputs.inl"
 #include "tabs/tab_settings.inl"
@@ -728,10 +784,8 @@ void RenderSettingsGUI() {
             }
         }
 
-    } else {
-        g_currentlyEditingMirror = "";
-        g_imageDragMode.store(false, std::memory_order_relaxed);
-        g_windowOverlayDragMode.store(false, std::memory_order_relaxed);
+    } else if (windowOpen) {
+        ResetGuiTransientInteractionState();
     }
     ImGui::End();
 

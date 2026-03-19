@@ -4,6 +4,34 @@
 #include <functional>
 #include <sstream>
 
+namespace {
+constexpr char kProfilerPathSeparator = '\x1f';
+
+std::string BuildScopeKey(const Profiler::TimingEvent& event, uint8_t scopeDepth) {
+    std::string key;
+    key.reserve(scopeDepth * 24);
+
+    for (uint8_t index = 0; index < scopeDepth; ++index) {
+        const char* scopeName = event.scopeNames[index];
+        if (scopeName == nullptr || scopeName[0] == '\0') { continue; }
+
+        if (!key.empty()) { key.push_back(kProfilerPathSeparator); }
+        key += scopeName;
+    }
+
+    if (key.empty() && event.sectionName != nullptr) { key = event.sectionName; }
+    return key;
+}
+
+double SumRootScopeTimes(const std::unordered_map<std::string, Profiler::ProfileEntry>& entries) {
+    double totalTime = 0.0;
+    for (const auto& [path, entry] : entries) {
+        if (entry.parentPath.empty()) { totalTime += entry.totalTime; }
+    }
+    return totalTime;
+}
+} // namespace
+
 Profiler& Profiler::GetInstance() {
     static Profiler instance;
     return instance;
@@ -42,15 +70,26 @@ void Profiler::RegisterThreadBuffer(ThreadRingBuffer* buffer) {
 
 void Profiler::MarkAsRenderThread() { GetThreadBuffer().isRenderThread = true; }
 
+Profiler::ScopedPause::ScopedPause(Profiler& profiler) : m_profiler(profiler.IsEnabled() ? &profiler : nullptr) {
+    if (m_profiler != nullptr) { m_profiler->PauseCurrentThread(); }
+}
+
+Profiler::ScopedPause::~ScopedPause() {
+    if (m_profiler != nullptr) { m_profiler->ResumeCurrentThread(); }
+}
+
 // ScopedTimer - completely lock-free
 Profiler::ScopedTimer::ScopedTimer(Profiler& profiler, const char* sectionName) : m_sectionName(sectionName), m_depth(0), m_active(false) {
     if (profiler.IsEnabled()) {
+        ThreadRingBuffer& buffer = GetThreadBuffer();
+        if (buffer.pauseDepth > 0) { return; }
+
         m_startTime = std::chrono::high_resolution_clock::now();
 
         // Track stack depth for hierarchy (thread-local, no sync)
-        ThreadRingBuffer& buffer = GetThreadBuffer();
         m_depth = static_cast<uint8_t>(buffer.scopeStack.size());
         buffer.scopeStack.push_back(sectionName);
+        buffer.activeTimers.push_back(this);
 
         m_active = true;
     }
@@ -59,28 +98,45 @@ Profiler::ScopedTimer::ScopedTimer(Profiler& profiler, const char* sectionName) 
 Profiler::ScopedTimer::~ScopedTimer() {
     if (m_active) {
         auto endTime = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration<double, std::milli>(endTime - m_startTime);
-        double durationMs = duration.count();
 
-        // Get parent name BEFORE popping (thread-local, no sync)
         ThreadRingBuffer& buffer = GetThreadBuffer();
-        const char* parentName = nullptr;
-        if (buffer.scopeStack.size() > 1) {
-            parentName = buffer.scopeStack[buffer.scopeStack.size() - 2];
+
+        if (!buffer.activeTimers.empty()) { buffer.activeTimers.pop_back(); }
+
+        auto activeDuration = endTime - m_startTime - m_pausedTime;
+        if (activeDuration < std::chrono::high_resolution_clock::duration::zero()) {
+            activeDuration = std::chrono::high_resolution_clock::duration::zero();
         }
+        double durationMs = std::chrono::duration<double, std::milli>(activeDuration).count();
+
+        // Capture the full scope ancestry before popping the current scope.
+        Profiler::GetInstance().SubmitEvent(m_sectionName, durationMs, m_depth, buffer);
 
         if (!buffer.scopeStack.empty()) { buffer.scopeStack.pop_back(); }
+    }
+}
 
-        // Submit event with parent info - completely lock-free
-        Profiler::GetInstance().SubmitEvent(m_sectionName, parentName, durationMs, m_depth);
+void Profiler::PauseCurrentThread() {
+    ThreadRingBuffer& buffer = GetThreadBuffer();
+    if (buffer.pauseDepth++ == 0) { buffer.pauseStartTime = std::chrono::high_resolution_clock::now(); }
+}
+
+void Profiler::ResumeCurrentThread() {
+    ThreadRingBuffer& buffer = GetThreadBuffer();
+    if (buffer.pauseDepth == 0) { return; }
+
+    buffer.pauseDepth--;
+    if (buffer.pauseDepth > 0) { return; }
+
+    const auto pausedDuration = std::chrono::high_resolution_clock::now() - buffer.pauseStartTime;
+    for (ScopedTimer* timer : buffer.activeTimers) {
+        if (timer != nullptr) { timer->m_pausedTime += pausedDuration; }
     }
 }
 
 // Lock-free event submission - O(1), no locks, no allocations
-void Profiler::SubmitEvent(const char* sectionName, const char* parentName, double durationMs, uint8_t depth) {
+void Profiler::SubmitEvent(const char* sectionName, double durationMs, uint8_t depth, ThreadRingBuffer& buffer) {
     if (!m_enabled) return;
-
-    ThreadRingBuffer& buffer = GetThreadBuffer();
 
     constexpr double SLOW_THRESHOLD_MS = 100.0;
     if (durationMs > SLOW_THRESHOLD_MS) {
@@ -100,10 +156,16 @@ void Profiler::SubmitEvent(const char* sectionName, const char* parentName, doub
 
     TimingEvent& event = buffer.events[writePos];
     event.sectionName = sectionName;
-    event.parentName = parentName;
     event.durationMs = durationMs;
     event.threadId = buffer.threadId;
     event.depth = depth;
+    event.scopeDepth = static_cast<uint8_t>((std::min)(buffer.scopeStack.size(), event.scopeNames.size()));
+    for (size_t index = 0; index < event.scopeDepth; ++index) {
+        event.scopeNames[index] = buffer.scopeStack[index];
+    }
+    for (size_t index = event.scopeDepth; index < event.scopeNames.size(); ++index) {
+        event.scopeNames[index] = nullptr;
+    }
     event.isRenderThread = buffer.isRenderThread;
 
     // Publish the write (release semantics ensure event data is visible)
@@ -149,7 +211,7 @@ void Profiler::ProcessEvents() {
 
             auto& targetEntries = event.isRenderThread ? m_renderThreadEntries : m_otherThreadEntries;
 
-            std::string pathKey = event.sectionName;
+            const std::string pathKey = BuildScopeKey(event, event.scopeDepth);
 
             auto& entry = targetEntries[pathKey];
             entry.displayName = event.sectionName;
@@ -158,12 +220,13 @@ void Profiler::ProcessEvents() {
             entry.depth = event.depth;
             entry.lastUpdateTime = std::chrono::steady_clock::now();
 
-            if (event.parentName != nullptr) {
-                std::string parentKey = event.parentName;
+            if (event.scopeDepth > 1) {
+                std::string parentKey = BuildScopeKey(event, static_cast<uint8_t>(event.scopeDepth - 1));
                 entry.parentPath = parentKey;
 
                 auto& parentEntry = targetEntries[parentKey];
-                parentEntry.displayName = event.parentName;
+                parentEntry.displayName = event.scopeNames[event.scopeDepth - 2];
+                parentEntry.depth = entry.depth > 0 ? entry.depth - 1 : 0;
                 bool found = false;
                 for (const auto& child : parentEntry.childPaths) {
                     if (child == pathKey) {
@@ -172,6 +235,8 @@ void Profiler::ProcessEvents() {
                     }
                 }
                 if (!found) { parentEntry.childPaths.push_back(pathKey); }
+            } else {
+                entry.parentPath.clear();
             }
 
             if (event.durationMs > entry.maxTimeInLastSecond) { entry.maxTimeInLastSecond = event.durationMs; }
@@ -259,11 +324,8 @@ void Profiler::EndFrame() {
 
     ProcessEvents();
 
-    m_totalRenderTime = 0.0;
-    m_totalOtherTime = 0.0;
-
-    for (const auto& [path, entry] : m_renderThreadEntries) { m_totalRenderTime += entry.totalTime; }
-    for (const auto& [path, entry] : m_otherThreadEntries) { m_totalOtherTime += entry.totalTime; }
+    m_totalRenderTime = SumRootScopeTimes(m_renderThreadEntries);
+    m_totalOtherTime = SumRootScopeTimes(m_otherThreadEntries);
 
     CalculateHierarchy(m_renderThreadEntries, m_totalRenderTime);
     CalculateHierarchy(m_otherThreadEntries, m_totalOtherTime);
@@ -318,8 +380,25 @@ void Profiler::EndFrame() {
                 if (entry.frameCount > 0) {
                     entry.rollingAverageTime = entry.accumulatedTime / entry.frameCount;
                     entry.rollingSelfTime = entry.accumulatedSelfTime / entry.frameCount;
+                    entry.rollingAverageCalls = static_cast<double>(entry.accumulatedCalls) / entry.frameCount;
+                } else {
+                    entry.rollingAverageCalls = 0.0;
                 }
+            }
+
+            for (auto& [path, entry] : entries) {
                 entry.totalPercentage = avgTotal > 0.0 ? (entry.rollingAverageTime / avgTotal) * 100.0 : 0.0;
+
+                if (!entry.parentPath.empty()) {
+                    auto parentIt = entries.find(entry.parentPath);
+                    if (parentIt != entries.end() && parentIt->second.rollingAverageTime > 0.0) {
+                        entry.parentPercentage = (entry.rollingAverageTime / parentIt->second.rollingAverageTime) * 100.0;
+                    } else {
+                        entry.parentPercentage = 0.0;
+                    }
+                } else {
+                    entry.parentPercentage = entry.totalPercentage;
+                }
             }
         };
         updateRollingAverages(m_renderThreadEntries, avgRenderTime);
@@ -331,6 +410,12 @@ void Profiler::EndFrame() {
             BuildDisplayTree(m_renderThreadEntries, m_cachedDisplayData.renderThread);
             BuildDisplayTree(m_otherThreadEntries, m_cachedDisplayData.otherThreads);
         }
+
+        auto resetWindowMaximums = [](std::unordered_map<std::string, ProfileEntry>& entries) {
+            for (auto& [path, entry] : entries) { entry.maxTimeInLastSecond = 0.0; }
+        };
+        resetWindowMaximums(m_renderThreadEntries);
+        resetWindowMaximums(m_otherThreadEntries);
 
         m_lastUpdateTime = currentTime;
     }

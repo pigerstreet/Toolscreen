@@ -2,14 +2,18 @@
 
 #include <algorithm>
 #include <format>
+#include "imgui.h"
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 void LoadLangs();
 
 nlohmann::json GetLangs();
 
 bool LoadTranslation(const std::string& lang);
+
+std::vector<ImWchar> BuildTranslationGlyphRanges();
 
 std::string tr(const char* key);
 

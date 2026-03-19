@@ -1,17 +1,103 @@
 #include "gui_internal.h"
 
+#include "common/i18n.h"
 #include "common/profiler.h"
 #include "common/utils.h"
+#include "imgui_cache.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 #include "platform/resource.h"
+#include "render/obs_thread.h"
 #include "render/render.h"
 #include "runtime/logic_thread.h"
 #include "third_party/stb_image.h"
 
 #include <GL/glew.h>
+#include <array>
 #include <algorithm>
 #include <chrono>
+
+static std::recursive_mutex s_imguiContextMutex;
+
+namespace {
+
+struct KeyboardLayoutFontRefreshRequest {
+    bool pending = false;
+    bool force = false;
+    ImVec2 windowSize = ImVec2(0.0f, 0.0f);
+    float keyHeight = 0.0f;
+    float keyboardScale = 1.0f;
+};
+
+struct KeyboardLayoutFontRefreshState {
+    bool valid = false;
+    std::string fontPath;
+    ImVec2 windowSize = ImVec2(0.0f, 0.0f);
+    float guiScaleFactor = 1.0f;
+    float keyHeight = 0.0f;
+    float keyboardScale = 1.0f;
+    float primarySize = 0.0f;
+    float secondarySize = 0.0f;
+};
+
+struct MainGuiFontRefreshState {
+    bool valid = false;
+    float guiScaleFactor = 1.0f;
+    std::string fontPath;
+};
+
+struct MainGuiFontRefreshRequest {
+    bool pending = false;
+    bool force = false;
+};
+
+KeyboardLayoutFontRefreshRequest s_pendingKeyboardLayoutFontRefresh;
+KeyboardLayoutFontRefreshState s_keyboardLayoutFontRefreshState;
+MainGuiFontRefreshState s_mainGuiFontRefreshState;
+MainGuiFontRefreshRequest s_pendingMainGuiFontRefresh;
+
+constexpr std::array<const char*, 5> kLocalizedFallbackFontPaths = {
+    "c:\\Windows\\Fonts\\msyh.ttc",
+    "c:\\Windows\\Fonts\\msyhbd.ttc",
+    "c:\\Windows\\Fonts\\Deng.ttf",
+    "c:\\Windows\\Fonts\\simhei.ttf",
+    "c:\\Windows\\Fonts\\simsun.ttc",
+};
+
+bool FontFileExists(const char* path) {
+    const DWORD attrs = GetFileAttributesA(path);
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+const ImWchar* GetGlyphRangesOrDefault(ImFontAtlas* atlas, const std::vector<ImWchar>& glyphRanges) {
+    if (!glyphRanges.empty()) {
+        return glyphRanges.data();
+    }
+    return atlas->GetGlyphRangesDefault();
+}
+
+void AddMergedLocalizedFallbackFont(ImFontAtlas* atlas, float size, const std::vector<ImWchar>& glyphRanges) {
+    ImFontConfig mergeCfg{};
+    mergeCfg.MergeMode = true;
+    mergeCfg.PixelSnapH = true;
+    mergeCfg.OversampleH = 2;
+    mergeCfg.OversampleV = 2;
+
+    const ImWchar* ranges = GetGlyphRangesOrDefault(atlas, glyphRanges);
+    for (const char* fallbackPath : kLocalizedFallbackFontPaths) {
+        if (!FontFileExists(fallbackPath)) {
+            continue;
+        }
+
+        if (atlas->AddFontFromFileTTF(fallbackPath, size, &mergeCfg, ranges) != nullptr) {
+            return;
+        }
+    }
+}
+
+}
+
+std::recursive_mutex& GetImGuiContextMutex() { return s_imguiContextMutex; }
 
 static std::string ResolveGuiFontPath(float baseFontSize) {
     const std::string configuredFontPath = g_config.fontPath;
@@ -29,10 +115,11 @@ static std::string ResolveGuiFontPath(float baseFontSize) {
     return usePath;
 }
 
-static ImFont* AddFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float size, const ImFontConfig* config = nullptr) {
-    ImFont* font = atlas->AddFontFromFileTTF(fontPath.c_str(), size, config);
+static ImFont* AddFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float size, const ImFontConfig* config = nullptr,
+                                   const ImWchar* glyphRanges = nullptr) {
+    ImFont* font = atlas->AddFontFromFileTTF(fontPath.c_str(), size, config, glyphRanges);
     if (!font && fontPath != ConfigDefaults::CONFIG_FONT_PATH) {
-        font = atlas->AddFontFromFileTTF(ConfigDefaults::CONFIG_FONT_PATH.c_str(), size, config);
+        font = atlas->AddFontFromFileTTF(ConfigDefaults::CONFIG_FONT_PATH.c_str(), size, config, glyphRanges);
     }
     return font;
 }
@@ -46,36 +133,64 @@ static ImFont* AddKeyboardFontWithFallback(ImFontAtlas* atlas, const std::string
     return nullptr;
 }
 
-static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
+static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, float keyboardSecondarySize) {
     ImGuiIO& io = ImGui::GetIO();
 
     const float baseFontSize = 16.0f * scaleFactor;
     const std::string usePath = ResolveGuiFontPath(baseFontSize);
+    const std::vector<ImWchar> localizedGlyphRanges = BuildTranslationGlyphRanges();
+    const ImWchar* localizedRanges = GetGlyphRangesOrDefault(io.Fonts, localizedGlyphRanges);
 
-    ImFont* baseFont = AddFontWithFallback(io.Fonts, usePath, baseFontSize);
+    io.Fonts->Clear();
+
+    ImFont* baseFont = AddFontWithFallback(io.Fonts, usePath, baseFontSize, nullptr, localizedRanges);
     if (!baseFont) {
         Log("GUI: Failed to load configured font, using ImGui default font");
         baseFont = io.Fonts->AddFontDefault();
     }
+    AddMergedLocalizedFallbackFont(io.Fonts, baseFontSize, localizedGlyphRanges);
+    io.FontDefault = baseFont;
 
     ImFontConfig keyFontCfg{};
     keyFontCfg.OversampleH = 4;
     keyFontCfg.OversampleV = 2;
     keyFontCfg.PixelSnapH = true;
 
-    g_keyboardLayoutPrimaryFont = AddKeyboardFontWithFallback(io.Fonts, usePath, baseFontSize * 2.80f, keyFontCfg);
-    g_keyboardLayoutSecondaryFont = AddKeyboardFontWithFallback(io.Fonts, usePath, baseFontSize * 2.00f, keyFontCfg);
+    const float primarySize = (keyboardPrimarySize > 0.0f) ? keyboardPrimarySize : (baseFontSize * 2.80f);
+    const float secondarySize = (keyboardSecondarySize > 0.0f) ? keyboardSecondarySize : (baseFontSize * 2.00f);
+
+    g_keyboardLayoutPrimaryFont = AddKeyboardFontWithFallback(io.Fonts, usePath, primarySize, keyFontCfg);
+    g_keyboardLayoutSecondaryFont = AddKeyboardFontWithFallback(io.Fonts, usePath, secondarySize, keyFontCfg);
 
     if (!g_keyboardLayoutPrimaryFont) g_keyboardLayoutPrimaryFont = baseFont;
     if (!g_keyboardLayoutSecondaryFont) g_keyboardLayoutSecondaryFont = baseFont;
 
-    ImGui::StyleColorsDark();
+    InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
+    io.Fonts->Build();
+
+    if (io.BackendRendererUserData != nullptr) {
+        ImGui_ImplOpenGL3_DestroyDeviceObjects();
+        ImGui_ImplOpenGL3_CreateDeviceObjects();
+    }
+}
+
+static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
+    RebuildImGuiFontAtlas(scaleFactor, 0.0f, 0.0f);
+
+    ImGuiStyle defaultStyle;
+    ImGui::GetStyle() = defaultStyle;
     LoadTheme();
     ApplyAppearanceConfig();
     ImGui::GetStyle().ScaleAllSizes(scaleFactor);
 
-    InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
+    s_mainGuiFontRefreshState.valid = true;
+    s_mainGuiFontRefreshState.guiScaleFactor = scaleFactor;
+    s_mainGuiFontRefreshState.fontPath = ResolveGuiFontPath(16.0f * scaleFactor);
 }
+
+static ImGuiContext* s_mainThreadImGuiContext = nullptr;
+static HWND s_mainThreadImGuiHwnd = NULL;
+static HGLRC s_mainThreadImGuiGlContext = NULL;
 
 float ComputeGuiScaleFactorFromCachedWindowSize() {
     int screenWidth = GetCachedWindowWidth();
@@ -91,26 +206,147 @@ float ComputeGuiScaleFactorFromCachedWindowSize() {
     return scaleFactor;
 }
 
+void RequestDynamicGuiFontRefresh(bool forceRefresh) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+    s_pendingMainGuiFontRefresh.pending = true;
+    s_pendingMainGuiFontRefresh.force = s_pendingMainGuiFontRefresh.force || forceRefresh;
+}
+
+void ApplyDynamicGuiFontRefresh() {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+    if (ImGui::GetCurrentContext() == nullptr) { return; }
+
+    const float guiScaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
+    const std::string fontPath = ResolveGuiFontPath(16.0f * guiScaleFactor);
+    const bool overlayFontReloadRequested = g_eyeZoomFontNeedsReload.exchange(false, std::memory_order_acq_rel);
+    const bool hasPendingRequest = s_pendingMainGuiFontRefresh.pending;
+    const bool scaleChanged = !s_mainGuiFontRefreshState.valid || fabsf(guiScaleFactor - s_mainGuiFontRefreshState.guiScaleFactor) > 0.001f;
+    const bool fontPathChanged = !s_mainGuiFontRefreshState.valid || fontPath != s_mainGuiFontRefreshState.fontPath;
+    const bool mustRefresh = s_pendingMainGuiFontRefresh.force || scaleChanged || fontPathChanged || overlayFontReloadRequested;
+
+    s_pendingMainGuiFontRefresh.pending = false;
+    s_pendingMainGuiFontRefresh.force = false;
+    if (!hasPendingRequest && !mustRefresh) { return; }
+    if (!mustRefresh) { return; }
+
+    ConfigureImGuiFontsAndStyle(guiScaleFactor);
+    if (s_keyboardLayoutFontRefreshState.valid) {
+        s_pendingKeyboardLayoutFontRefresh.pending = true;
+        s_pendingKeyboardLayoutFontRefresh.force = true;
+        s_pendingKeyboardLayoutFontRefresh.windowSize = s_keyboardLayoutFontRefreshState.windowSize;
+        s_pendingKeyboardLayoutFontRefresh.keyHeight = s_keyboardLayoutFontRefreshState.keyHeight;
+        s_pendingKeyboardLayoutFontRefresh.keyboardScale = s_keyboardLayoutFontRefreshState.keyboardScale;
+    }
+    InvalidateImGuiCache();
+}
+
+void RequestKeyboardLayoutFontRefresh(const ImVec2& windowSize, float keyHeight, float keyboardScale, bool forceRefresh) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+    if (windowSize.x <= 0.0f || windowSize.y <= 0.0f || keyHeight <= 0.0f) { return; }
+
+    s_pendingKeyboardLayoutFontRefresh.pending = true;
+    s_pendingKeyboardLayoutFontRefresh.force = s_pendingKeyboardLayoutFontRefresh.force || forceRefresh;
+    s_pendingKeyboardLayoutFontRefresh.windowSize = windowSize;
+    s_pendingKeyboardLayoutFontRefresh.keyHeight = keyHeight;
+    s_pendingKeyboardLayoutFontRefresh.keyboardScale = keyboardScale;
+}
+
+void ApplyPendingKeyboardLayoutFontRefresh() {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+    if (!s_pendingKeyboardLayoutFontRefresh.pending || ImGui::GetCurrentContext() == nullptr) { return; }
+
+    const KeyboardLayoutFontRefreshRequest request = s_pendingKeyboardLayoutFontRefresh;
+    s_pendingKeyboardLayoutFontRefresh.pending = false;
+    s_pendingKeyboardLayoutFontRefresh.force = false;
+
+    const float guiScaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
+    const float baseFontSize = 16.0f * guiScaleFactor;
+    const std::string fontPath = ResolveGuiFontPath(baseFontSize);
+
+    const float widthScale = request.windowSize.x / 1180.0f;
+    const float heightScale = request.windowSize.y / 720.0f;
+    const float windowFactor = std::clamp((std::min)(widthScale, heightScale), 0.85f, 1.08f);
+
+    float desiredPrimary = roundf(request.keyHeight * (0.50f + 0.02f * request.keyboardScale) * windowFactor);
+    float desiredSecondary = roundf(request.keyHeight * (0.34f + 0.02f * request.keyboardScale) * windowFactor);
+
+    desiredPrimary = std::clamp(desiredPrimary, baseFontSize * 1.00f, baseFontSize * 2.05f);
+    desiredSecondary = std::clamp(desiredSecondary, baseFontSize * 0.82f, (std::max)(baseFontSize * 0.82f, desiredPrimary - 2.0f));
+
+    const bool settingsChanged = !s_keyboardLayoutFontRefreshState.valid || request.force ||
+        fabsf(desiredPrimary - s_keyboardLayoutFontRefreshState.primarySize) > 0.5f ||
+        fabsf(desiredSecondary - s_keyboardLayoutFontRefreshState.secondarySize) > 0.5f ||
+        fabsf(guiScaleFactor - s_keyboardLayoutFontRefreshState.guiScaleFactor) > 0.001f ||
+        fontPath != s_keyboardLayoutFontRefreshState.fontPath;
+    if (!settingsChanged) { return; }
+
+    RebuildImGuiFontAtlas(guiScaleFactor, desiredPrimary, desiredSecondary);
+
+    s_keyboardLayoutFontRefreshState.valid = true;
+    s_keyboardLayoutFontRefreshState.fontPath = fontPath;
+    s_keyboardLayoutFontRefreshState.windowSize = request.windowSize;
+    s_keyboardLayoutFontRefreshState.guiScaleFactor = guiScaleFactor;
+    s_keyboardLayoutFontRefreshState.keyHeight = request.keyHeight;
+    s_keyboardLayoutFontRefreshState.keyboardScale = request.keyboardScale;
+    s_keyboardLayoutFontRefreshState.primarySize = desiredPrimary;
+    s_keyboardLayoutFontRefreshState.secondarySize = desiredSecondary;
+
+    InvalidateImGuiCache();
+}
+
 void HandleImGuiContextReset() {
-    if (ImGui::GetCurrentContext()) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+    if (s_mainThreadImGuiContext) {
+        ImGui::SetCurrentContext(s_mainThreadImGuiContext);
         Log("Performing deferred full ImGui context reset.");
         ClearSupporterTierTextureCache();
         g_keyboardLayoutPrimaryFont = nullptr;
         g_keyboardLayoutSecondaryFont = nullptr;
+        s_pendingMainGuiFontRefresh = {};
+        s_pendingKeyboardLayoutFontRefresh = {};
+        s_keyboardLayoutFontRefreshState = {};
+        s_mainGuiFontRefreshState = {};
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
+        ImGui::DestroyContext(s_mainThreadImGuiContext);
+        s_mainThreadImGuiContext = nullptr;
+        s_mainThreadImGuiHwnd = NULL;
+        s_mainThreadImGuiGlContext = NULL;
     }
 }
 
 void InitializeImGuiContext(HWND hwnd) {
-    if (ImGui::GetCurrentContext() == nullptr) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+    const HGLRC currentGlContext = wglGetCurrentContext();
+    if (s_mainThreadImGuiContext != nullptr && currentGlContext != NULL && s_mainThreadImGuiGlContext != NULL &&
+        currentGlContext != s_mainThreadImGuiGlContext) {
+        Log("Main-thread ImGui detected WGL context change; recreating context.");
+        HandleImGuiContextReset();
+    }
+
+    if (s_mainThreadImGuiContext == nullptr) {
         Log("Re-creating ImGui context after full reset.");
         IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ConfigureImGuiFontsAndStyle(ComputeGuiScaleFactorFromCachedWindowSize());
+        s_mainThreadImGuiContext = ImGui::CreateContext();
+        ImGui::SetCurrentContext(s_mainThreadImGuiContext);
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         ImGui_ImplWin32_Init(hwnd);
         ImGui_ImplOpenGL3_Init("#version 330");
+        ConfigureImGuiFontsAndStyle(ComputeGuiScaleFactorFromCachedWindowSize());
+        s_mainThreadImGuiHwnd = hwnd;
+        s_mainThreadImGuiGlContext = currentGlContext;
+        return;
+    }
+
+    ImGui::SetCurrentContext(s_mainThreadImGuiContext);
+    if (hwnd != NULL && hwnd != s_mainThreadImGuiHwnd) {
+        ImGui_ImplWin32_Shutdown();
+        ImGui_ImplWin32_Init(hwnd);
+        s_mainThreadImGuiHwnd = hwnd;
+    }
+    if (currentGlContext != NULL) {
+        s_mainThreadImGuiGlContext = currentGlContext;
     }
 }
 
@@ -123,6 +359,130 @@ std::atomic<bool> g_pieSpikeAlertActive{ false };
 std::atomic<float> g_pieSpikeLastOrangeRatio{ 0.0f };
 std::atomic<int64_t> g_pieSpikeLastAlertTimeMs{ 0 };
 char g_pieSpikeMatchedName[64] = {};
+
+static ImU32 ScaleToastAlpha(ImU32 color, float alpha) {
+    ImVec4 rgba = ImGui::ColorConvertU32ToFloat4(color);
+    rgba.w *= std::clamp(alpha, 0.0f, 1.0f);
+    return ImGui::ColorConvertFloat4ToU32(rgba);
+}
+
+static void RenderFullscreenWelcomeToastImGui(float toastOpacity) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+
+    HWND hwnd = g_minecraftHwnd.load();
+    if (!hwnd) { return; }
+
+    InitializeImGuiContext(hwnd);
+    if (ImGui::GetCurrentContext() == nullptr) { return; }
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    SyncImGuiDisplayMetrics(hwnd);
+    ApplyDynamicGuiFontRefresh();
+    ImGui::NewFrame();
+
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f) {
+        ImGui::Render();
+        RenderImGuiWithStateProtection(true);
+        return;
+    }
+
+    const float toastScale = (io.DisplaySize.y / 1080.0f) * 0.45f;
+    const ImVec2 toastSize(700.0f * toastScale, 250.0f * toastScale);
+    const float unit = toastSize.y / 250.0f;
+
+    std::string titleText = tr("label.toolscreen");
+    std::string hotkeyText = GetKeyComboString(g_config.guiHotkey);
+    if (hotkeyText.empty()) {
+        hotkeyText = tr("hotkeys.none");
+    }
+    const std::string messageText = tr("welcome_toast.fullscreen_press_to_configure", hotkeyText);
+
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(toastSize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    if (ImGui::Begin("##fullscreen_welcome_toast", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground)) {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImFont* font = ImGui::GetFont();
+        const ImVec2 origin = ImGui::GetWindowPos();
+        const ImVec2 size = ImGui::GetWindowSize();
+        const float rounding = 28.0f * unit;
+
+        auto calcTextSize = [&](const std::string& text, float fontSize) {
+            return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+        };
+        auto addVec = [](const ImVec2& a, const ImVec2& b) {
+            return ImVec2(a.x + b.x, a.y + b.y);
+        };
+        auto subVec = [](const ImVec2& a, const ImVec2& b) {
+            return ImVec2(a.x - b.x, a.y - b.y);
+        };
+        auto fitTextSize = [&](const std::string& text, float desiredSize, float minSize, float maxWidth) {
+            float fontSize = desiredSize;
+            while (fontSize > minSize && calcTextSize(text, fontSize).x > maxWidth) {
+                fontSize -= unit;
+            }
+            return fontSize;
+        };
+        auto drawCenteredText = [&](const std::string& text, float centerY, float fontSize, ImU32 color) {
+            const ImVec2 textSize = calcTextSize(text, fontSize);
+            const ImVec2 textPos(origin.x + (size.x - textSize.x) * 0.5f, origin.y + centerY - textSize.y * 0.5f);
+            drawList->AddText(font, fontSize, addVec(textPos, ImVec2(2.0f * unit, 2.0f * unit)), ScaleToastAlpha(IM_COL32(20, 8, 31, 145), toastOpacity),
+                              text.c_str());
+            drawList->AddText(font, fontSize, textPos, color, text.c_str());
+        };
+        auto drawCenteredOutlinedText = [&](const std::string& text, float centerY, float fontSize, ImU32 fillColor, ImU32 outlineColor,
+                                            float outlineOffset) {
+            const ImVec2 textSize = calcTextSize(text, fontSize);
+            const ImVec2 textPos(origin.x + (size.x - textSize.x) * 0.5f, origin.y + centerY - textSize.y * 0.5f);
+            const ImVec2 offsets[] = {
+                ImVec2(-outlineOffset, 0.0f), ImVec2(outlineOffset, 0.0f), ImVec2(0.0f, -outlineOffset), ImVec2(0.0f, outlineOffset),
+                ImVec2(-outlineOffset, -outlineOffset), ImVec2(outlineOffset, -outlineOffset), ImVec2(-outlineOffset, outlineOffset),
+                ImVec2(outlineOffset, outlineOffset),
+            };
+
+            for (const ImVec2& offset : offsets) {
+                drawList->AddText(font, fontSize, addVec(textPos, offset), outlineColor, text.c_str());
+            }
+            drawList->AddText(font, fontSize, addVec(textPos, ImVec2(1.5f * unit, 1.5f * unit)), ScaleToastAlpha(IM_COL32(34, 15, 54, 120), toastOpacity),
+                              text.c_str());
+            drawList->AddText(font, fontSize, textPos, fillColor, text.c_str());
+        };
+
+        const ImVec2 panelMax = addVec(origin, size);
+        drawList->AddRectFilled(origin, panelMax, ScaleToastAlpha(IM_COL32(36, 10, 58, 244), toastOpacity), rounding,
+                                ImDrawFlags_RoundCornersBottomRight);
+        drawList->AddRectFilledMultiColor(origin, panelMax,
+                                          ScaleToastAlpha(IM_COL32(70, 45, 113, 208), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(40, 14, 64, 72), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(36, 10, 58, 0), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(65, 41, 107, 146), toastOpacity));
+        drawList->AddRectFilledMultiColor(origin, ImVec2(panelMax.x, origin.y + 118.0f * unit),
+                                          ScaleToastAlpha(IM_COL32(82, 58, 130, 88), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(63, 38, 102, 18), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(0, 0, 0, 0), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(0, 0, 0, 0), toastOpacity));
+
+        const float titleFontSize = fitTextSize(titleText, 66.0f * unit, 34.0f * unit, size.x - 80.0f * unit);
+        drawCenteredOutlinedText(titleText, 52.0f * unit, titleFontSize,
+                                 ScaleToastAlpha(IM_COL32(243, 224, 151, 255), toastOpacity),
+                                 ScaleToastAlpha(IM_COL32(74, 46, 35, 225), toastOpacity), 1.7f * unit);
+
+        const float messageFontSize = fitTextSize(messageText, 48.0f * unit, 22.0f * unit, size.x - 78.0f * unit);
+        drawCenteredText(messageText, 155.0f * unit, messageFontSize, ScaleToastAlpha(IM_COL32(247, 241, 224, 255), toastOpacity));
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+
+    ImGui::Render();
+    RenderImGuiWithStateProtection(true);
+}
 
 void RenderWelcomeToast(bool isFullscreen) {
     if (isFullscreen && g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) { return; }
@@ -163,6 +523,11 @@ void RenderWelcomeToast(bool isFullscreen) {
         }
     }
 
+    if (isFullscreen) {
+        RenderFullscreenWelcomeToastImGui(toastOpacity);
+        return;
+    }
+
     static GLuint s_program = 0;
     static GLuint s_vao = 0;
     static GLuint s_vbo = 0;
@@ -170,9 +535,7 @@ void RenderWelcomeToast(bool isFullscreen) {
     static GLint s_locOpacity = -1;
 
     static GLuint s_toast1Texture = 0;
-    static GLuint s_toast2Texture = 0;
     static int s_toast1Width = 0, s_toast1Height = 0;
-    static int s_toast2Width = 0, s_toast2Height = 0;
 
     static HGLRC s_lastCtx = NULL;
     HGLRC currentCtx = wglGetCurrentContext();
@@ -184,9 +547,7 @@ void RenderWelcomeToast(bool isFullscreen) {
         s_locTexture = -1;
         s_locOpacity = -1;
         s_toast1Texture = 0;
-        s_toast2Texture = 0;
         s_toast1Width = s_toast1Height = 0;
-        s_toast2Width = s_toast2Height = 0;
     }
 
     if (s_program == 0) {
@@ -280,11 +641,10 @@ void main() {
     };
 
     ensureToastTexture(IDR_TOAST1_PNG, s_toast1Texture, s_toast1Width, s_toast1Height);
-    ensureToastTexture(IDR_TOAST2_PNG, s_toast2Texture, s_toast2Width, s_toast2Height);
 
-    GLuint texture = isFullscreen ? s_toast2Texture : s_toast1Texture;
-    int imgW = isFullscreen ? s_toast2Width : s_toast1Width;
-    int imgH = isFullscreen ? s_toast2Height : s_toast1Height;
+    GLuint texture = s_toast1Texture;
+    int imgW = s_toast1Width;
+    int imgH = s_toast1Height;
     if (s_program == 0 || s_vao == 0 || s_vbo == 0 || texture == 0 || imgW <= 0 || imgH <= 0) { return; }
 
     GLint viewport[4];
@@ -400,6 +760,7 @@ void RenderPerformanceOverlay(bool showPerformanceOverlay) {
     static auto lastOverlayUpdate = std::chrono::steady_clock::now();
     static float cachedFrameTime = 0.0f;
     static float cachedOriginalFrameTime = 0.0f;
+    static int cachedObsTargetFramerate = ConfigDefaults::CONFIG_OBS_FRAMERATE;
 
     auto currentTime = std::chrono::steady_clock::now();
     auto timeSinceLastUpdate = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastOverlayUpdate);
@@ -407,6 +768,7 @@ void RenderPerformanceOverlay(bool showPerformanceOverlay) {
     if (timeSinceLastUpdate.count() >= 500) {
         cachedFrameTime = static_cast<float>(g_lastFrameTimeMs.load());
         cachedOriginalFrameTime = static_cast<float>(g_originalFrameTimeMs.load());
+        cachedObsTargetFramerate = GetObsTargetFramerate();
         lastOverlayUpdate = currentTime;
     }
 
@@ -417,6 +779,7 @@ void RenderPerformanceOverlay(bool showPerformanceOverlay) {
                      ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::Text("Render Hook Overhead: %.2f ms", cachedFrameTime);
     ImGui::Text("Original Frame Time: %.2f ms", cachedOriginalFrameTime);
+    ImGui::Text("OBS Target Framerate: %d fps", cachedObsTargetFramerate);
     ImGui::End();
 }
 
@@ -444,15 +807,19 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
         ImGui::Text("%s", sectionTitle);
         ImGui::PopStyleColor();
 
-        if (ImGui::BeginTable("##ProfilerTable", 5, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
+        if (ImGui::BeginTable("##ProfilerTable", 7, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
             ImGui::TableSetupColumn("Section", ImGuiTableColumnFlags_WidthFixed, 280.0f);
             ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableSetupColumn("Self", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("Calls/f", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableSetupColumn("Of Parent", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableSetupColumn("Of Total", ImGuiTableColumnFlags_WidthFixed, 60.0f);
 
             for (size_t i = 0; i < entries.size(); ++i) {
-                const auto& [name, entry] = entries[i];
+                const auto& path = entries[i].first;
+                const auto& entry = entries[i].second;
+                const std::string& displayName = entry.displayName.empty() ? path : entry.displayName;
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
@@ -480,7 +847,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     }
                 }
 
-                bool isUnspecified = (name == "[Unspecified]");
+                bool isUnspecified = (displayName == "[Unspecified]");
                 if (isUnspecified) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
                 } else if (entry.depth == 0) {
@@ -491,7 +858,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
                 }
 
-                ImGui::Text("%s%s", indent.c_str(), name.c_str());
+                ImGui::Text("%s%s", indent.c_str(), displayName.c_str());
                 ImGui::PopStyleColor();
 
                 ImGui::TableSetColumnIndex(1);
@@ -509,6 +876,24 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                 }
 
                 ImGui::TableSetColumnIndex(3);
+                if (entry.rollingAverageCalls >= 100.0) {
+                    ImGui::Text("%.0f", entry.rollingAverageCalls);
+                } else if (entry.rollingAverageCalls >= 10.0) {
+                    ImGui::Text("%.1f", entry.rollingAverageCalls);
+                } else if (entry.rollingAverageCalls > 0.0) {
+                    ImGui::Text("%.2f", entry.rollingAverageCalls);
+                } else {
+                    ImGui::Text("0");
+                }
+
+                ImGui::TableSetColumnIndex(4);
+                if (entry.maxTimeInLastSecond >= 0.0001) {
+                    ImGui::Text("%.4fms", entry.maxTimeInLastSecond);
+                } else {
+                    ImGui::Text("<0.0001");
+                }
+
+                ImGui::TableSetColumnIndex(5);
                 if (entry.parentPercentage >= 1.0) {
                     ImGui::Text("%.0f%%", entry.parentPercentage);
                 } else if (entry.parentPercentage >= 0.1) {
@@ -517,7 +902,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     ImGui::Text("<1%%");
                 }
 
-                ImGui::TableSetColumnIndex(4);
+                ImGui::TableSetColumnIndex(6);
                 if (entry.totalPercentage >= 1.0) {
                     ImGui::Text("%.0f%%", entry.totalPercentage);
                 } else if (entry.totalPercentage >= 0.1) {
@@ -632,9 +1017,35 @@ void RenderImGuiWithStateProtection(bool useFullProtection) {
     }
 }
 
+void SyncImGuiDisplayMetrics(HWND hwnd) {
+    if (!ImGui::GetCurrentContext()) { return; }
+
+    int clientWidth = 0;
+    int clientHeight = 0;
+    if (hwnd != NULL) {
+        RECT clientRect{};
+        if (GetClientRect(hwnd, &clientRect)) {
+            clientWidth = clientRect.right - clientRect.left;
+            clientHeight = clientRect.bottom - clientRect.top;
+        }
+    }
+
+    if (clientWidth <= 0 || clientHeight <= 0) {
+        clientWidth = GetCachedWindowWidth();
+        clientHeight = GetCachedWindowHeight();
+    }
+
+    if (clientWidth <= 0 || clientHeight <= 0) { return; }
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(static_cast<float>(clientWidth), static_cast<float>(clientHeight));
+}
+
 void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
     (void)hDc;
     (void)oWglSwapBuffers;
+
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
 
     if (ImGui::GetCurrentContext() == nullptr) {
         IMGUI_CHECKVERSION();
@@ -646,6 +1057,7 @@ void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    SyncImGuiDisplayMetrics(g_minecraftHwnd.load());
     ImGui::NewFrame();
 
     RenderConfigErrorGUI();

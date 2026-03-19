@@ -1,9 +1,8 @@
 lang='en'
 disableHookChaining = false
-hookChainingNextTarget = 'Original'
 allowCursorEscape = true
 basicModeEnabled = true
-configVersion = 2
+configVersion = 3
 defaultMode = 'Fullscreen'
 fontPath = 'C:\Windows\Fonts\Arial.ttf'
 fpsLimit = 0
@@ -12,11 +11,14 @@ mirrorMatchColorspace = 'Auto'
 guiHotkey = [162, 73]
 borderlessHotkey = [ ]
 hideAnimationsInGame = true
+limitCaptureFramerate = true
 disableFullscreenPrompt = false
 disableConfigurePrompt = false
-keyRepeatDelay = 0
-keyRepeatStartDelay = 0
+keyRepeatDelay = -1
+keyRepeatStartDelay = -1
+keyRepeatResumePreviousHeldKey = false
 mouseSensitivity = 1.0
+mouseMovementPollingRate = 1000
 windowOverlay = []
 windowsMouseSpeed = 0
 
@@ -36,7 +38,6 @@ enabled = false
     cursorSize = 32
 
 [debug]
-delayRenderingUntilBlitted = false
 delayRenderingUntilFinished = false
 fakeCursor = false
 logAnimation = false
@@ -141,6 +142,7 @@ opacity = 0.75
 path = ''
 pixelatedScaling = false
 relativeTo = 'topLeftScreen'
+relativeSizing = true
 scale = 1.2
 x = 0
 y = 0
@@ -313,6 +315,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = true, height = 1440, width = 2560, x = 0, y = 0 }
 width = 2560
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -354,6 +357,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 384
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -395,6 +399,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 384
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -436,6 +441,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 'max(330, roundEven(screenWidth / 8))'
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]
@@ -477,6 +483,7 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = "roundEven(screenWidth * 0.98)"
+browserOverlayIds = []
 windowOverlayIds = []
 
     [mode.transition]

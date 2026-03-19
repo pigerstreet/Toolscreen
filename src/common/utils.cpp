@@ -945,28 +945,16 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
     std::string currentMode;
 
     LogCategory("mode_switch", "[MODE_SWITCH] Acquiring g_modeIdMutex...");
-    // Get current mode - keep lock minimal, no I/O inside
-    {
-        std::lock_guard<std::mutex> lock(g_modeIdMutex);
-        LogCategory("mode_switch", "[MODE_SWITCH] g_modeIdMutex acquired");
-        currentMode = g_currentModeId;
+    // Keep the mode ID publication serialized with StartModeTransition so render readers
+    // never observe the new mode before the transition snapshot is ready.
+    std::unique_lock<std::mutex> modeLock(g_modeIdMutex);
+    LogCategory("mode_switch", "[MODE_SWITCH] g_modeIdMutex acquired");
+    currentMode = g_currentModeId;
 
-        if (EqualsIgnoreCase(currentMode, newModeId)) {
-            Log("Mode switch to '" + newModeId + "' requested, but already in that mode.");
-            return false;
-        }
-
-        g_currentModeId = newModeId;
-        // Update lock-free double-buffer for input handlers
-        int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
-        g_modeIdBuffers[nextIndex] = newModeId;
-        g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
-        LogCategory("mode_switch", "[MODE_SWITCH] g_currentModeId updated to: " + newModeId);
+    if (EqualsIgnoreCase(currentMode, newModeId)) {
+        Log("Mode switch to '" + newModeId + "' requested, but already in that mode.");
+        return false;
     }
-    LogCategory("mode_switch", "[MODE_SWITCH] g_modeIdMutex released");
-
-    // Async file write OUTSIDE the mutex - never blocks
-    WriteCurrentModeToFile(newModeId);
 
     std::string logMessage = "[MODE] Switching from '" + currentMode + "' to '" + newModeId + "'";
     if (!source.empty()) { logMessage += " (source: " + source + ")"; }
@@ -1015,7 +1003,13 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         const ModeConfig* fromMode = modeSnap ? GetModeFromSnapshot(*modeSnap, currentMode) : nullptr;
         const ModeConfig* toMode = modeSnap ? GetModeFromSnapshot(*modeSnap, newModeId) : nullptr;
 
-        if (modeSnap && fromMode && toMode && !EqualsIgnoreCase(fromMode->id, toMode->id)) {
+        const bool preserveEyeZoomSourceMirrorsForSlideOut =
+            fromMode && EqualsIgnoreCase(fromMode->id, "EyeZoom") && modeSnap && modeSnap->eyezoom.slideMirrorsIn && !forceCut;
+        const bool preserveModeSourceMirrorsForSlideOut = fromMode && fromMode->slideMirrorsIn && !forceCut;
+        const bool preserveSourceOnlyMirrorsForSlideOut =
+            preserveEyeZoomSourceMirrorsForSlideOut || preserveModeSourceMirrorsForSlideOut;
+
+        if (!preserveSourceOnlyMirrorsForSlideOut && modeSnap && fromMode && toMode && !EqualsIgnoreCase(fromMode->id, toMode->id)) {
             auto collectModeMirrorIds = [](const Config& cfg, const ModeConfig* mode, std::unordered_set<std::string>& outMirrorIds) {
                 if (!mode) return;
 
@@ -1052,10 +1046,17 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         if (!useAnimatedPosition) {
             if (fromMode) {
                 if (fromMode->stretch.enabled) {
-                    fromWidth = fromMode->stretch.width;
-                    fromHeight = fromMode->stretch.height;
-                    fromX = fromMode->stretch.x;
-                    fromY = fromMode->stretch.y;
+                    if (EqualsIgnoreCase(fromMode->id, "Fullscreen")) {
+                        fromWidth = fullW;
+                        fromHeight = fullH;
+                        fromX = 0;
+                        fromY = 0;
+                    } else {
+                        fromWidth = fromMode->stretch.width;
+                        fromHeight = fromMode->stretch.height;
+                        fromX = fromMode->stretch.x;
+                        fromY = fromMode->stretch.y;
+                    }
                 } else {
                     fromWidth = fromMode->width;
                     fromHeight = fromMode->height;
@@ -1072,10 +1073,17 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
 
         if (toMode) {
             if (toMode->stretch.enabled) {
-                toWidth = toMode->stretch.width;
-                toHeight = toMode->stretch.height;
-                toX = toMode->stretch.x;
-                toY = toMode->stretch.y;
+                if (EqualsIgnoreCase(toMode->id, "Fullscreen")) {
+                    toWidth = fullW;
+                    toHeight = fullH;
+                    toX = 0;
+                    toY = 0;
+                } else {
+                    toWidth = toMode->stretch.width;
+                    toHeight = toMode->stretch.height;
+                    toX = toMode->stretch.x;
+                    toY = toMode->stretch.y;
+                }
             } else {
                 toWidth = toMode->width;
                 toHeight = toMode->height;
@@ -1148,6 +1156,18 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
                     ", Bg:" + BackgroundTransitionTypeToString(toModeCopy.backgroundTransition));
     StartModeTransition(currentMode, newModeId, fromWidth, fromHeight, fromX, fromY, toWidth, toHeight, toX, toY, toModeCopy);
     LogCategory("mode_switch", "[MODE_SWITCH] StartModeTransition completed");
+
+    g_currentModeId = newModeId;
+    int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
+    g_modeIdBuffers[nextIndex] = newModeId;
+    g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
+    LogCategory("mode_switch", "[MODE_SWITCH] Published new active mode after transition setup: " + newModeId);
+
+    modeLock.unlock();
+    LogCategory("mode_switch", "[MODE_SWITCH] g_modeIdMutex released");
+
+    // Async file write OUTSIDE the mutex - never blocks
+    WriteCurrentModeToFile(newModeId);
 
     return true;
 }
@@ -1291,10 +1311,17 @@ ModeViewportInfo GetCurrentModeViewport_Internal() {
 
     info.stretchEnabled = mode->stretch.enabled;
     if (mode->stretch.enabled) {
-        info.stretchX = mode->stretch.x;
-        info.stretchY = mode->stretch.y;
-        info.stretchWidth = mode->stretch.width;
-        info.stretchHeight = mode->stretch.height;
+        if (EqualsIgnoreCase(mode->id, "Fullscreen")) {
+            info.stretchX = 0;
+            info.stretchY = 0;
+            info.stretchWidth = screenW;
+            info.stretchHeight = screenH;
+        } else {
+            info.stretchX = mode->stretch.x;
+            info.stretchY = mode->stretch.y;
+            info.stretchWidth = mode->stretch.width;
+            info.stretchHeight = mode->stretch.height;
+        }
     } else {
         info.stretchX = screenW / 2 - mode->width / 2;
         info.stretchY = screenH / 2 - mode->height / 2;
@@ -1360,7 +1387,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
         _set_se_translator(SEHTranslator);
 
         try {
-            Log("Started thread for loading image '" + id + "' from path '" + path + "'");
+            LogCategory("image_monitor", "Started thread for loading image '" + id + "' from path '" + path + "'");
             try {
                 if (g_isShuttingDown.load()) { return; }
 
@@ -1452,7 +1479,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 
                     std::lock_guard<std::mutex> lock(g_decodedImagesMutex);
                     g_decodedImagesQueue.push_back(decoded);
-                    Log("Successfully decoded image for '" + id + "' from '" + path + "' on background thread.");
+                    LogCategory("image_monitor", "Successfully decoded image for '" + id + "' from '" + path + "' on background thread.");
                 } else {
                     Log("ERROR: Failed to decode image '" + path + "' for ID '" + id +
                         "'. Reason: " + (stbi_failure_reason() ? stbi_failure_reason() : "unknown error"));
@@ -1467,7 +1494,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
         } catch (const std::exception& e) { LogException("ImageLoadThread for '" + id + "'", e); } catch (...) {
             Log("EXCEPTION in ImageLoadThread for '" + id + "': Unknown exception");
         }
-        Log("Image load thread for '" + id + "' has completed.");
+        LogCategory("image_monitor", "Image load thread for '" + id + "' has completed.");
     }).detach();
 }
 
@@ -1672,7 +1699,13 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
 
     const bool lctrl_down = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
     const bool rctrl_down = (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
+    const bool lshift_down = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
+    const bool rshift_down = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
+    const bool lalt_down = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0;
+    const bool ralt_down = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
     const bool ctrl_down_now = lctrl_down || rctrl_down;
+    const bool shift_down_now = lshift_down || rshift_down;
+    const bool alt_down_now = lalt_down || ralt_down;
 
     // For trigger on release, skip exclusion key checks since user may have released modifiers
     if (!triggerOnRelease) {
@@ -1684,6 +1717,18 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                 excludedPressed = lctrl_down;
             } else if (excluded_key == VK_RCONTROL) {
                 excludedPressed = rctrl_down;
+            } else if (excluded_key == VK_SHIFT) {
+                excludedPressed = shift_down_now;
+            } else if (excluded_key == VK_LSHIFT) {
+                excludedPressed = lshift_down;
+            } else if (excluded_key == VK_RSHIFT) {
+                excludedPressed = rshift_down;
+            } else if (excluded_key == VK_MENU) {
+                excludedPressed = alt_down_now;
+            } else if (excluded_key == VK_LMENU) {
+                excludedPressed = lalt_down;
+            } else if (excluded_key == VK_RMENU) {
+                excludedPressed = ralt_down;
             } else {
                 excludedPressed = (GetAsyncKeyState(excluded_key) & 0x8000) != 0;
             }
@@ -1752,23 +1797,19 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
             main_key_pressed = (wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT);
             break;
         case VK_LSHIFT:
-            main_key_pressed = (wParam == VK_LSHIFT) ||
-                               (wParam == VK_SHIFT && (triggerOnRelease ? true : (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_LSHIFT) || (wParam == VK_SHIFT && (triggerOnRelease ? true : lshift_down));
             break;
         case VK_RSHIFT:
-            main_key_pressed = (wParam == VK_RSHIFT) ||
-                               (wParam == VK_SHIFT && (triggerOnRelease ? true : (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_RSHIFT) || (wParam == VK_SHIFT && (triggerOnRelease ? true : rshift_down));
             break;
         case VK_MENU:
             main_key_pressed = (wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU);
             break;
         case VK_LMENU:
-            main_key_pressed = (wParam == VK_LMENU) ||
-                               (wParam == VK_MENU && (triggerOnRelease ? true : (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_LMENU) || (wParam == VK_MENU && (triggerOnRelease ? true : lalt_down));
             break;
         case VK_RMENU:
-            main_key_pressed = (wParam == VK_RMENU) ||
-                               (wParam == VK_MENU && (triggerOnRelease ? true : (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0));
+            main_key_pressed = (wParam == VK_RMENU) || (wParam == VK_MENU && (triggerOnRelease ? true : ralt_down));
             break;
         default:
             break;
@@ -1783,14 +1824,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     // For trigger on release, skip modifier state checks since modifiers may have been
     // released before or at the same time as the main key
     if (!triggerOnRelease) {
-        bool lshift_down = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
-        bool rshift_down = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
-        bool lalt_down = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0;
-        bool ralt_down = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
-
-        bool shift_down_now = lshift_down || rshift_down;
-        bool alt_down_now = lalt_down || ralt_down;
-
         if (s_enableHotkeyDebug) {
             Log("[Hotkey] Modifiers - Need: LCtrl=" + std::to_string(requires_lctrl) + " RCtrl=" + std::to_string(requires_rctrl) +
                 " Ctrl=" + std::to_string(requires_ctrl) + " LShift=" + std::to_string(requires_lshift) + " RShift=" +
@@ -1849,33 +1882,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                 }
                 return false;
             }
-        }
-
-        bool ctrl_in_exclusions = std::find_if(exclusionKeys.begin(), exclusionKeys.end(), [](DWORD k) {
-                                      return k == VK_CONTROL || k == VK_LCONTROL || k == VK_RCONTROL;
-                                  }) != exclusionKeys.end();
-        bool shift_in_exclusions = std::find_if(exclusionKeys.begin(), exclusionKeys.end(), [](DWORD k) {
-                                       return k == VK_SHIFT || k == VK_LSHIFT || k == VK_RSHIFT;
-                                   }) != exclusionKeys.end();
-        bool alt_in_exclusions = std::find_if(exclusionKeys.begin(), exclusionKeys.end(), [](DWORD k) {
-                                     return k == VK_MENU || k == VK_LMENU || k == VK_RMENU;
-                                 }) != exclusionKeys.end();
-
-        bool any_ctrl_required = requires_ctrl || requires_lctrl || requires_rctrl;
-        bool any_shift_required = requires_shift || requires_lshift || requires_rshift;
-        bool any_alt_required = requires_alt || requires_lalt || requires_ralt;
-
-        if (!any_ctrl_required && ctrl_down_now && ctrl_in_exclusions) {
-            if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Ctrl pressed but excluded");
-            return false;
-        }
-        if (!any_shift_required && shift_down_now && shift_in_exclusions) {
-            if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Shift pressed but excluded");
-            return false;
-        }
-        if (!any_alt_required && alt_down_now && alt_in_exclusions) {
-            if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Alt pressed but excluded");
-            return false;
         }
     } else {
         if (s_enableHotkeyDebug) { Log("[Hotkey] Skipping modifier checks for trigger-on-release hotkey"); }
@@ -2242,6 +2248,73 @@ UINT GetToolscreenBorderlessToggleMessageId() {
     return s_msg;
 }
 
+static std::atomic<int> s_lastRequestedClientW{ 0 };
+static std::atomic<int> s_lastRequestedClientH{ 0 };
+static std::atomic<int> s_prevRequestedClientW{ 0 };
+static std::atomic<int> s_prevRequestedClientH{ 0 };
+
+bool GetRecentRequestedWindowClientResizes(int& outCurrentW, int& outCurrentH, int& outPreviousW, int& outPreviousH) {
+    outCurrentW = s_lastRequestedClientW.load(std::memory_order_relaxed);
+    outCurrentH = s_lastRequestedClientH.load(std::memory_order_relaxed);
+    outPreviousW = s_prevRequestedClientW.load(std::memory_order_relaxed);
+    outPreviousH = s_prevRequestedClientH.load(std::memory_order_relaxed);
+    return outCurrentW > 0 && outCurrentH > 0;
+}
+
+static bool GetCenteredWindowedRestoreRect(HWND hwnd, RECT& outRect) {
+    RECT monitorRect{};
+    if (!GetMonitorRectForWindow(hwnd, monitorRect)) {
+        if (!GetWindowRect(hwnd, &monitorRect)) { return false; }
+    }
+
+    const int monitorW = monitorRect.right - monitorRect.left;
+    const int monitorH = monitorRect.bottom - monitorRect.top;
+    if (monitorW <= 0 || monitorH <= 0) { return false; }
+
+    const int windowedW = (std::max)(1, monitorW / 2);
+    const int windowedH = (std::max)(1, monitorH / 2);
+
+    outRect.left = monitorRect.left + (monitorW - windowedW) / 2;
+    outRect.top = monitorRect.top + (monitorH - windowedH) / 2;
+    outRect.right = outRect.left + windowedW;
+    outRect.bottom = outRect.top + windowedH;
+    return true;
+}
+
+static bool ApplyCenteredWindowedRestore(HWND hwnd, UINT extraFlags, const char* source, RECT* appliedRect = nullptr) {
+    if (!hwnd || !IsWindow(hwnd)) { return false; }
+
+    if (IsIconic(hwnd) || IsZoomed(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    }
+
+    RECT targetRect{};
+    if (!GetCenteredWindowedRestoreRect(hwnd, targetRect)) { return false; }
+
+    const int targetW = targetRect.right - targetRect.left;
+    const int targetH = targetRect.bottom - targetRect.top;
+    if (!SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH, SWP_NOOWNERZORDER | extraFlags)) {
+        std::string src = source ? source : "unknown";
+        Log("[WINDOW] SetWindowPos failed while centering windowed restore (" + src + "). Error=" + std::to_string(GetLastError()));
+        return false;
+    }
+
+    if (appliedRect) { *appliedRect = targetRect; }
+    return true;
+}
+
+bool CenterWindowedRestoreOnCurrentMonitor(HWND hwnd, const char* source) {
+    RECT targetRect{};
+    if (!ApplyCenteredWindowedRestore(hwnd, 0, source, &targetRect)) { return false; }
+
+    const int targetW = targetRect.right - targetRect.left;
+    const int targetH = targetRect.bottom - targetRect.top;
+    std::string src = source ? source : "unknown";
+    Log("[WINDOW] Centered windowed restore (" + src + ") -> " + std::to_string(targetW) + "x" + std::to_string(targetH) +
+        " at " + std::to_string(targetRect.left) + "," + std::to_string(targetRect.top));
+    return true;
+}
+
 bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* source) {
     if (!hwnd || !IsWindow(hwnd) || width <= 0 || height <= 0) { return false; }
 
@@ -2254,6 +2327,15 @@ bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* sou
     const ULONGLONG nowMs = GetTickCount64();
 
     std::lock_guard<std::mutex> lock(s_resizeRequestMutex);
+
+    const int lastRequestedW = s_lastRequestedClientW.load(std::memory_order_relaxed);
+    const int lastRequestedH = s_lastRequestedClientH.load(std::memory_order_relaxed);
+    if (lastRequestedW != width || lastRequestedH != height) {
+        s_prevRequestedClientW.store(lastRequestedW, std::memory_order_relaxed);
+        s_prevRequestedClientH.store(lastRequestedH, std::memory_order_relaxed);
+        s_lastRequestedClientW.store(width, std::memory_order_relaxed);
+        s_lastRequestedClientH.store(height, std::memory_order_relaxed);
+    }
 
     if (s_lastHwnd == hwnd && s_lastWidth == width && s_lastHeight == height && (nowMs - s_lastPostedMs) <= 50) { return true; }
 
@@ -2272,6 +2354,26 @@ bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* sou
 
     InvalidateTrackedGameTextureId(false);
     return true;
+}
+
+static void RequestCurrentModeClientResizeSync(HWND hwnd, const char* source) {
+    if (!hwnd || !IsWindow(hwnd)) { return; }
+
+    auto cfgSnap = GetConfigSnapshot();
+    if (!cfgSnap) { return; }
+
+    const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    if (!mode || mode->width <= 0 || mode->height <= 0) { return; }
+
+    if (EqualsIgnoreCase(mode->id, "Fullscreen") && mode->useRelativeSize) {
+        // Real window-size changes will trigger a logic-thread recalculation that reposts
+        // WM_SIZE with the freshly recomputed internal size. Avoid sending the stale
+        // pre-recalc fullscreen-relative dimensions here.
+        return;
+    }
+
+    RequestWindowClientResize(hwnd, mode->width, mode->height, source);
 }
 
 void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
@@ -2307,11 +2409,6 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
     const int targetW = (targetRect.right - targetRect.left);
     const int targetH = (targetRect.bottom - targetRect.top);
-
-    const int windowedW = (std::max)(1, targetW / 2);
-    const int windowedH = (std::max)(1, targetH / 2);
-    const int windowedX = targetRect.left + (targetW - windowedW) / 2;
-    const int windowedY = targetRect.top + (targetH - windowedH) / 2;
 
     RECT beforeRect{};
     if (!GetWindowRect(hwnd, &beforeRect)) { return; }
@@ -2380,6 +2477,7 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
         InvalidateTrackedGameTextureId(false);
         state.active = true;
+        RequestCurrentModeClientResizeSync(hwnd, "window:borderless_on");
         Log("[WINDOW] Toggled borderless ON (" + std::to_string(targetW) + "x" + std::to_string(targetH) + ")");
     } else {
         if (IsIconic(hwnd) || IsZoomed(hwnd)) {
@@ -2402,10 +2500,9 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             ok = setWindowLongChecked(GWL_EXSTYLE, targetExStyle);
         }
 
+        RECT centeredRect{};
         if (ok) {
-            ok = SetWindowPos(hwnd, HWND_NOTOPMOST, windowedX, windowedY, windowedW, windowedH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED) !=
-                 FALSE;
-            if (!ok) { Log("[WINDOW] SetWindowPos failed while disabling borderless. Error=" + std::to_string(GetLastError())); }
+            ok = ApplyCenteredWindowedRestore(hwnd, SWP_FRAMECHANGED, "window:borderless_off", &centeredRect);
         }
 
         if (!ok) {
@@ -2415,6 +2512,9 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
         InvalidateTrackedGameTextureId(false);
         state.active = false;
-        Log("[WINDOW] Toggled borderless OFF -> windowed centered (" + std::to_string(windowedW) + "x" + std::to_string(windowedH) + ")");
+        RequestCurrentModeClientResizeSync(hwnd, "window:borderless_off");
+        const int centeredW = centeredRect.right - centeredRect.left;
+        const int centeredH = centeredRect.bottom - centeredRect.top;
+        Log("[WINDOW] Toggled borderless OFF -> windowed centered (" + std::to_string(centeredW) + "x" + std::to_string(centeredH) + ")");
     }
 }

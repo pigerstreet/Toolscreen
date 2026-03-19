@@ -1,5 +1,6 @@
 #include "virtual_camera.h"
 #include "common/utils.h"
+#include "render/render.h"
 
 // Prevent Windows min/max macros from conflicting with std::min/std::max
 #ifndef NOMINMAX
@@ -12,14 +13,26 @@
 #include <vector>
 #include <windows.h>
 
+extern std::atomic<HWND> g_minecraftHwnd;
+extern Config g_config;
+
 
 std::atomic<bool> g_virtualCameraActive{ false };
 
 static std::mutex g_vcMutex;
 static std::string g_vcLastError;
 static std::atomic<LONGLONG> g_vcLastCaptureTick{ 0 };
+static std::atomic<int> g_vcForcedCaptureFrames{ 0 };
 
-constexpr int kVirtualCameraFixedFps = 60;
+// Pending-resize debounce state (lock-free)
+static std::atomic<uint32_t> g_vcPendingResizeWidth{ 0 };
+static std::atomic<uint32_t> g_vcPendingResizeHeight{ 0 };
+static std::atomic<ULONGLONG> g_vcPendingResizeRequestedMs{ 0 };
+
+constexpr int kVirtualCameraDefaultFps = 60;
+constexpr int kVirtualCameraLimitedFps = 30;
+constexpr ULONGLONG kVirtualCameraResizeDebounceMs = 150;
+constexpr int kVirtualCameraForcedFramesAfterReinit = 6;
 
 #define VIDEO_NAME L"OBSVirtualCamVideo"
 #define FRAME_HEADER_SIZE 32
@@ -51,7 +64,10 @@ struct VirtualCameraState {
     uint8_t* frame[3] = { nullptr, nullptr, nullptr };
     uint32_t width = 0;
     uint32_t height = 0;
-    uint64_t interval = 10000000ULL / kVirtualCameraFixedFps;
+    uint32_t capacityWidth = 0;
+    uint32_t capacityHeight = 0;
+    uint32_t frameCapacityBytes = 0;
+    uint64_t interval = 10000000ULL / kVirtualCameraDefaultFps;
     LARGE_INTEGER lastFrameTime = {};
     LARGE_INTEGER perfFreq = {};
     bool active = false;
@@ -59,12 +75,218 @@ struct VirtualCameraState {
 
 static VirtualCameraState g_vcState;
 
+static void ForceVirtualCameraCaptureFrames(int frameCount);
+
 
 // Helper to clamp int to byte range (avoids Windows min/max macro conflict)
 static inline uint8_t clampToByte(int32_t val) {
     if (val < 0) return 0;
     if (val > 255) return 255;
     return static_cast<uint8_t>(val);
+}
+
+static int GetVirtualCameraTargetFps() {
+    auto cfgSnapshot = GetConfigSnapshot();
+    if (cfgSnapshot && cfgSnapshot->limitCaptureFramerate) {
+        return kVirtualCameraLimitedFps;
+    }
+    return kVirtualCameraDefaultFps;
+}
+
+static uint64_t GetVirtualCameraInterval100ns(int fps) {
+    if (fps <= 0) { return 10000000ULL / kVirtualCameraDefaultFps; }
+    return 10000000ULL / static_cast<uint64_t>(fps);
+}
+
+static LONGLONG GetVirtualCameraMinTicks() {
+    const int targetFps = GetVirtualCameraTargetFps();
+    if (targetFps <= 0 || g_vcState.perfFreq.QuadPart <= 0) { return 0; }
+    return (std::max<LONGLONG>)(1, g_vcState.perfFreq.QuadPart / static_cast<LONGLONG>(targetFps));
+}
+
+static void SyncVirtualCameraIntervalLocked() {
+    const uint64_t targetInterval = GetVirtualCameraInterval100ns(GetVirtualCameraTargetFps());
+    if (g_vcState.interval == targetInterval) { return; }
+
+    g_vcState.interval = targetInterval;
+    if (g_vcState.header) {
+        g_vcState.header->interval = targetInterval;
+    }
+}
+
+
+// Record pending resize; actual resize is debounced and applied by FlushPendingVirtualCameraResize().
+void OnGameWindowResized(uint32_t newWidth, uint32_t newHeight) {
+    if (!IsVirtualCameraActive()) { return; }
+    if ((newWidth & 1U) != 0) { newWidth -= 1; }
+    if ((newHeight & 1U) != 0) { newHeight -= 1; }
+    if (newWidth < 2 || newHeight < 2) { return; }
+
+    g_vcPendingResizeWidth.store(newWidth, std::memory_order_relaxed);
+    g_vcPendingResizeHeight.store(newHeight, std::memory_order_relaxed);
+    g_vcPendingResizeRequestedMs.store(GetTickCount64(), std::memory_order_release);
+}
+
+// Internal: full stop-and-restart reinit. Used when in-place resize is not possible.
+static bool ReinitializeVirtualCamera(uint32_t width, uint32_t height) {
+    if ((width & 1U) != 0) { width -= 1; }
+    if ((height & 1U) != 0) { height -= 1; }
+    if (width < 2 || height < 2) { return false; }
+
+    if (IsVirtualCameraActive()) { StopVirtualCamera(); }
+
+    if (!StartVirtualCamera(width, height)) {
+        Log("Virtual Camera: Reinit after resize failed - " + g_vcLastError);
+        return false;
+    }
+
+    ResetSameThreadVirtualCameraCaptureState();
+    return true;
+}
+
+bool FlushPendingVirtualCameraResize() {
+    const ULONGLONG requestedMs = g_vcPendingResizeRequestedMs.load(std::memory_order_acquire);
+    if (requestedMs == 0) { return false; }
+
+    const ULONGLONG now = GetTickCount64();
+    if ((now - requestedMs) < kVirtualCameraResizeDebounceMs) { return false; }
+
+    // Consume the pending resize
+    const uint32_t width = g_vcPendingResizeWidth.load(std::memory_order_relaxed);
+    const uint32_t height = g_vcPendingResizeHeight.load(std::memory_order_relaxed);
+    g_vcPendingResizeRequestedMs.store(0, std::memory_order_release);
+
+    if (width < 2 || height < 2) { return false; }
+    if (!IsVirtualCameraActive()) { return false; }
+
+    // Check if already at the desired size
+    uint32_t currentW = 0, currentH = 0;
+    if (GetVirtualCameraResolution(currentW, currentH) && currentW == width && currentH == height) {
+        return false;
+    }
+
+    return EnsureVirtualCameraSize(width, height);
+}
+
+void RequestVirtualCameraRecoveryFrames() {
+    std::lock_guard<std::mutex> lock(g_vcMutex);
+    g_vcLastCaptureTick.store(0, std::memory_order_release);
+    g_vcState.lastFrameTime.QuadPart = 0;
+    ForceVirtualCameraCaptureFrames(kVirtualCameraForcedFramesAfterReinit);
+}
+
+static void ResolveVirtualCameraMonitorSize(int& outWidth, int& outHeight) {
+    outWidth = 0;
+    outHeight = 0;
+
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (!GetMonitorSizeForWindow(hwnd, outWidth, outHeight) || outWidth <= 0 || outHeight <= 0) {
+        outWidth = GetSystemMetrics(SM_CXSCREEN);
+        outHeight = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    if (outWidth < 2) { outWidth = 2; }
+    if (outHeight < 2) { outHeight = 2; }
+    if ((outWidth & 1) != 0) { --outWidth; }
+    if ((outHeight & 1) != 0) { --outHeight; }
+}
+
+static uint32_t ResolveVirtualCameraDimension(int configuredValue, int monitorExtent) {
+    int resolved = configuredValue;
+    if (resolved <= 0) { resolved = monitorExtent; }
+    if (monitorExtent > 0) { resolved = (std::min)(resolved, monitorExtent); }
+    if (resolved < 2) { resolved = 2; }
+    if ((resolved & 1) != 0) { --resolved; }
+    return static_cast<uint32_t>(resolved);
+}
+
+static void ResolveVirtualCameraAllocationSize(uint32_t requestedWidth,
+                                               uint32_t requestedHeight,
+                                               uint32_t& outAllocWidth,
+                                               uint32_t& outAllocHeight) {
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+    if (screenWidth < 2) { screenWidth = 2; }
+    if (screenHeight < 2) { screenHeight = 2; }
+
+    outAllocWidth = (std::max)(requestedWidth, static_cast<uint32_t>(screenWidth));
+    outAllocHeight = (std::max)(requestedHeight, static_cast<uint32_t>(screenHeight));
+    if ((outAllocWidth & 1U) != 0) { --outAllocWidth; }
+    if ((outAllocHeight & 1U) != 0) { --outAllocHeight; }
+}
+
+static void ForceVirtualCameraCaptureFrames(int frameCount) {
+    if (frameCount <= 0) { return; }
+
+    int observed = g_vcForcedCaptureFrames.load(std::memory_order_relaxed);
+    while (observed < frameCount &&
+           !g_vcForcedCaptureFrames.compare_exchange_weak(observed, frameCount, std::memory_order_acq_rel,
+                                                         std::memory_order_relaxed)) {}
+}
+
+static void FillVirtualCameraFrameBlack(uint8_t* frameData, uint32_t width, uint32_t height, uint32_t frameCapacityBytes) {
+    if (!frameData || width < 2 || height < 2) { return; }
+
+    const uint32_t yPlaneSize = width * height;
+    const uint32_t uvPlaneSize = yPlaneSize / 2;
+    const uint32_t requiredFrameBytes = yPlaneSize + uvPlaneSize;
+    if (requiredFrameBytes > frameCapacityBytes) { return; }
+
+    memset(frameData, 0, frameCapacityBytes);
+    memset(frameData, 16, yPlaneSize);
+    memset(frameData + yPlaneSize, 128, uvPlaneSize);
+}
+
+static void PublishBlankVirtualCameraFrameLocked(uint32_t width, uint32_t height) {
+    if (!g_vcState.active || !g_vcState.header || width < 2 || height < 2) { return; }
+
+    const uint32_t requiredFrameBytes = width * height * 3 / 2;
+    if (requiredFrameBytes > g_vcState.frameCapacityBytes) { return; }
+
+    if (g_vcState.frame[0]) {
+        FillVirtualCameraFrameBlack(g_vcState.frame[0], width, height, g_vcState.frameCapacityBytes);
+    }
+
+    g_vcState.header->cx = width;
+    g_vcState.header->cy = height;
+    g_vcState.header->interval = g_vcState.interval;
+    g_vcState.header->write_idx = 0;
+    g_vcState.header->read_idx = 0;
+    g_vcState.header->state = SHARED_QUEUE_STATE_READY;
+    if (g_vcState.ts[0]) { *g_vcState.ts[0] = 0; }
+
+    MemoryBarrier();
+}
+
+static bool ResetVirtualCameraStateLocked(uint32_t width, uint32_t height, const char* reason) {
+    if (!g_vcState.active || !g_vcState.header || width < 2 || height < 2) { return false; }
+
+    const uint32_t requiredFrameBytes = width * height * 3 / 2;
+    if (requiredFrameBytes > g_vcState.frameCapacityBytes) { return false; }
+
+    g_vcState.width = width;
+    g_vcState.height = height;
+    g_vcState.lastFrameTime.QuadPart = 0;
+    g_vcLastCaptureTick.store(0, std::memory_order_release);
+    SyncVirtualCameraIntervalLocked();
+
+    g_vcState.header->cx = width;
+    g_vcState.header->cy = height;
+    g_vcState.header->interval = g_vcState.interval;
+
+    for (int i = 0; i < 3; ++i) {
+        if (g_vcState.ts[i]) { *g_vcState.ts[i] = 0; }
+        FillVirtualCameraFrameBlack(g_vcState.frame[i], width, height, g_vcState.frameCapacityBytes);
+    }
+
+    PublishBlankVirtualCameraFrameLocked(width, height);
+    ForceVirtualCameraCaptureFrames(kVirtualCameraForcedFramesAfterReinit);
+
+    MemoryBarrier();
+
+    g_vcLastError.clear();
+    Log(std::string("Virtual Camera: Reinitialized ") + reason + " at " + std::to_string(width) + "x" + std::to_string(height));
+    return true;
 }
 
 // Single pass: computes Y for every pixel and UV for every 2x2 block simultaneously
@@ -153,6 +375,31 @@ bool IsVirtualCameraInUseByOBS() {
     return inUse;
 }
 
+void GetVirtualCameraMonitorSize(uint32_t& outWidth, uint32_t& outHeight) {
+    int monitorWidth = 0;
+    int monitorHeight = 0;
+    ResolveVirtualCameraMonitorSize(monitorWidth, monitorHeight);
+    outWidth = static_cast<uint32_t>(monitorWidth);
+    outHeight = static_cast<uint32_t>(monitorHeight);
+}
+
+bool GetPreferredVirtualCameraResolution(uint32_t& outWidth, uint32_t& outHeight) {
+    outWidth = 0;
+    outHeight = 0;
+
+    int monitorWidth = 0;
+    int monitorHeight = 0;
+    ResolveVirtualCameraMonitorSize(monitorWidth, monitorHeight);
+
+    uint32_t width = ResolveVirtualCameraDimension(0, monitorWidth);
+    uint32_t height = ResolveVirtualCameraDimension(0, monitorHeight);
+    if (width < 2 || height < 2) { return false; }
+
+    outWidth = width;
+    outHeight = height;
+    return true;
+}
+
 bool StartVirtualCamera(uint32_t width, uint32_t height) {
     if ((width & 1U) != 0) { width -= 1; }
     if ((height & 1U) != 0) { height -= 1; }
@@ -181,12 +428,17 @@ bool StartVirtualCamera(uint32_t width, uint32_t height) {
         return false;
     }
 
-    g_vcState.interval = 10000000ULL / kVirtualCameraFixedFps;
+    const int targetFps = GetVirtualCameraTargetFps();
+    g_vcState.interval = GetVirtualCameraInterval100ns(targetFps);
     QueryPerformanceFrequency(&g_vcState.perfFreq);
     g_vcState.lastFrameTime.QuadPart = 0;
     g_vcLastCaptureTick.store(0, std::memory_order_release);
 
-    uint32_t frameSize = width * height * 3 / 2;
+    uint32_t allocWidth = 0;
+    uint32_t allocHeight = 0;
+    ResolveVirtualCameraAllocationSize(width, height, allocWidth, allocHeight);
+
+    uint32_t frameSize = allocWidth * allocHeight * 3 / 2;
     uint32_t offset_frame[3];
     uint32_t totalSize;
 
@@ -239,10 +491,21 @@ bool StartVirtualCamera(uint32_t width, uint32_t height) {
 
     g_vcState.width = width;
     g_vcState.height = height;
+    g_vcState.capacityWidth = allocWidth;
+    g_vcState.capacityHeight = allocHeight;
+    g_vcState.frameCapacityBytes = frameSize;
     g_vcState.active = true;
     g_virtualCameraActive.store(true, std::memory_order_release);
+    g_vcLastError.clear();
+    for (int i = 0; i < 3; ++i) {
+        if (g_vcState.ts[i]) { *g_vcState.ts[i] = 0; }
+        FillVirtualCameraFrameBlack(g_vcState.frame[i], width, height, g_vcState.frameCapacityBytes);
+    }
+    PublishBlankVirtualCameraFrameLocked(width, height);
+    ForceVirtualCameraCaptureFrames(kVirtualCameraForcedFramesAfterReinit);
 
-    Log("Virtual Camera: Started at " + std::to_string(width) + "x" + std::to_string(height) + " @ 60fps");
+    Log("Virtual Camera: Started at " + std::to_string(width) + "x" + std::to_string(height) + " @ " + std::to_string(targetFps) +
+        "fps");
     return true;
 }
 
@@ -270,8 +533,14 @@ void StopVirtualCamera() {
     }
 
     g_vcState.active = false;
+    g_vcState.width = 0;
+    g_vcState.height = 0;
+    g_vcState.capacityWidth = 0;
+    g_vcState.capacityHeight = 0;
+    g_vcState.frameCapacityBytes = 0;
     g_vcState.lastFrameTime.QuadPart = 0;
     g_vcLastCaptureTick.store(0, std::memory_order_release);
+    g_vcForcedCaptureFrames.store(0, std::memory_order_release);
 
     Log("Virtual Camera: Stopped");
 }
@@ -279,10 +548,18 @@ void StopVirtualCamera() {
 bool ShouldCaptureVirtualCameraFrame() {
     if (!g_virtualCameraActive.load(std::memory_order_acquire)) { return false; }
 
+    int forcedFrames = g_vcForcedCaptureFrames.load(std::memory_order_relaxed);
+    while (forcedFrames > 0) {
+        if (g_vcForcedCaptureFrames.compare_exchange_weak(forcedFrames, forcedFrames - 1, std::memory_order_acq_rel,
+                                                          std::memory_order_relaxed)) {
+            return true;
+        }
+    }
+
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
 
-    const LONGLONG minTicks = g_vcState.perfFreq.QuadPart / kVirtualCameraFixedFps;
+    const LONGLONG minTicks = GetVirtualCameraMinTicks();
     if (minTicks <= 0) { return true; }
 
     LONGLONG observed = g_vcLastCaptureTick.load(std::memory_order_relaxed);
@@ -299,18 +576,17 @@ bool EnsureVirtualCameraSize(uint32_t width, uint32_t height) {
     if ((height & 1U) != 0) { height -= 1; }
     if (width < 2 || height < 2) { return false; }
 
-    uint32_t oldWidth = 0;
-    uint32_t oldHeight = 0;
     {
         std::lock_guard<std::mutex> lock(g_vcMutex);
         if (!g_vcState.active) { return false; }
-        oldWidth = g_vcState.width;
-        oldHeight = g_vcState.height;
         if (g_vcState.width == width && g_vcState.height == height) { return true; }
+        if (ResetVirtualCameraStateLocked(width, height, "for size change")) {
+            ResetSameThreadVirtualCameraCaptureState();
+            return true;
+        }
     }
 
-    Log("Virtual Camera: Resizing from " + std::to_string(oldWidth) + "x" + std::to_string(oldHeight) + " to " +
-        std::to_string(width) + "x" + std::to_string(height));
+    Log("Virtual Camera: Size change exceeds current shared-memory capacity, recreating producer");
 
     StopVirtualCamera();
     if (!StartVirtualCamera(width, height)) {
@@ -318,8 +594,11 @@ bool EnsureVirtualCameraSize(uint32_t width, uint32_t height) {
         return false;
     }
 
+    ResetSameThreadVirtualCameraCaptureState();
     return true;
 }
+
+
 
 bool GetVirtualCameraResolution(uint32_t& outWidth, uint32_t& outHeight) {
     std::lock_guard<std::mutex> lock(g_vcMutex);
@@ -340,13 +619,14 @@ bool WriteVirtualCameraFrame(const uint8_t* rgba_data, uint32_t width, uint32_t 
     std::lock_guard<std::mutex> lock(g_vcMutex);
 
     if (!g_vcState.active || !g_vcState.header) { return false; }
+    SyncVirtualCameraIntervalLocked();
 
     // FPS limiting before any work (lock-free fast path)
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     if (g_vcState.lastFrameTime.QuadPart != 0) {
         LONGLONG elapsed = now.QuadPart - g_vcState.lastFrameTime.QuadPart;
-        LONGLONG minTicks = g_vcState.perfFreq.QuadPart / kVirtualCameraFixedFps;
+        LONGLONG minTicks = GetVirtualCameraMinTicks();
         if (elapsed < minTicks) {
             return true;
         }
@@ -384,18 +664,28 @@ bool WriteVirtualCameraFrame(const uint8_t* rgba_data, uint32_t width, uint32_t 
 }
 
 bool WriteVirtualCameraFrameNV12(const uint8_t* nv12_data, uint32_t width, uint32_t height, uint64_t timestamp) {
+    if (!nv12_data) { return false; }
+
+    const size_t yPlaneSize = static_cast<size_t>(width) * static_cast<size_t>(height);
+    return WriteVirtualCameraFrameNV12Planes(nv12_data, nv12_data + yPlaneSize, width, height, timestamp);
+}
+
+bool WriteVirtualCameraFrameNV12Planes(const uint8_t* y_plane, const uint8_t* uv_plane, uint32_t width, uint32_t height,
+                                       uint64_t timestamp) {
     if (!g_virtualCameraActive.load(std::memory_order_acquire)) { return false; }
+    if (!y_plane || !uv_plane) { return false; }
 
     std::lock_guard<std::mutex> lock(g_vcMutex);
 
     if (!g_vcState.active || !g_vcState.header) { return false; }
+    SyncVirtualCameraIntervalLocked();
 
     // FPS limiting (lock-free integer comparison)
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     if (g_vcState.lastFrameTime.QuadPart != 0) {
         LONGLONG elapsed = now.QuadPart - g_vcState.lastFrameTime.QuadPart;
-        LONGLONG minTicks = g_vcState.perfFreq.QuadPart / kVirtualCameraFixedFps;
+        LONGLONG minTicks = GetVirtualCameraMinTicks();
         if (elapsed < minTicks) {
             return true;
         }
@@ -406,8 +696,10 @@ bool WriteVirtualCameraFrameNV12(const uint8_t* nv12_data, uint32_t width, uint3
     uint32_t writeIdx = g_vcState.header->write_idx + 1;
     uint32_t idx = writeIdx % 3;
 
-    uint32_t frameSize = width * height * 3 / 2;
-    memcpy(g_vcState.frame[idx], nv12_data, frameSize);
+    const size_t yPlaneSize = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t uvPlaneSize = yPlaneSize / 2u;
+    memcpy(g_vcState.frame[idx], y_plane, yPlaneSize);
+    memcpy(g_vcState.frame[idx] + yPlaneSize, uv_plane, uvPlaneSize);
 
     *g_vcState.ts[idx] = timestamp;
 

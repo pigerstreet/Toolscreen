@@ -1,5 +1,5 @@
 #include "logic_thread.h"
-#include "common/expression_parser.h"
+#include "common/mode_dimensions.h"
 #include "gui/gui.h"
 #include "render/mirror_thread.h"
 #include "common/profiler.h"
@@ -8,6 +8,8 @@
 #include "version.h"
 #include <Windows.h>
 #include <mmsystem.h>
+#include <unordered_map>
+#include <unordered_set>
 #include <thread>
 
 std::atomic<bool> g_logicThreadRunning{ false };
@@ -165,12 +167,30 @@ static int s_lastViewportScreenH = 0;
 void UpdateActiveMirrorConfigs() {
     PROFILE_SCOPE_CAT("LT Mirror Configs", "Logic Thread");
 
+    struct MirrorGroupPlacement {
+        const MirrorGroupConfig* group = nullptr;
+        const MirrorGroupItem* item = nullptr;
+    };
+
     // Use config snapshot for thread-safe access to modes/mirrors/mirrorGroups
     auto cfgSnap = GetConfigSnapshot();
     if (!cfgSnap) return;
     const Config& cfg = *cfgSnap;
 
     const uint64_t snapVer = g_configSnapshotVersion.load(std::memory_order_acquire);
+    static uint64_t s_lookupSnapshotVersion = 0;
+    static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
+    static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
+
+    if (s_lookupSnapshotVersion != snapVer) {
+        s_lookupSnapshotVersion = snapVer;
+        s_groupByName.clear();
+        s_mirrorByName.clear();
+        s_groupByName.reserve(cfg.mirrorGroups.size());
+        s_mirrorByName.reserve(cfg.mirrors.size());
+        for (const auto& group : cfg.mirrorGroups) { s_groupByName[group.name] = &group; }
+        for (const auto& mirror : cfg.mirrors) { s_mirrorByName[mirror.name] = &mirror; }
+    }
 
     // Get current mode ID from double-buffer (lock-free)
     std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
@@ -182,70 +202,72 @@ void UpdateActiveMirrorConfigs() {
     if (!mode) { return; }
 
     std::vector<std::string> currentMirrorIds = mode->mirrorIds;
+    std::unordered_set<std::string> currentMirrorIdSet(currentMirrorIds.begin(), currentMirrorIds.end());
+    currentMirrorIdSet.reserve(mode->mirrorIds.size() + (mode->mirrorGroupIds.size() * 4));
+    std::unordered_map<std::string, MirrorGroupPlacement> mirrorPlacements;
+    mirrorPlacements.reserve(currentMirrorIdSet.size() + (mode->mirrorGroupIds.size() * 4));
+
     for (const auto& groupName : mode->mirrorGroupIds) {
-        for (const auto& group : cfg.mirrorGroups) {
-            if (group.name == groupName) {
-                for (const auto& item : group.mirrors) {
-                    if (std::find(currentMirrorIds.begin(), currentMirrorIds.end(), item.mirrorId) == currentMirrorIds.end()) {
-                        currentMirrorIds.push_back(item.mirrorId);
-                    }
-                }
-                break;
+        auto groupIt = s_groupByName.find(groupName);
+        if (groupIt == s_groupByName.end() || !groupIt->second) {
+            continue;
+        }
+
+        const MirrorGroupConfig& group = *groupIt->second;
+        for (const auto& item : group.mirrors) {
+            if (!item.enabled) continue;
+
+            if (currentMirrorIdSet.insert(item.mirrorId).second) {
+                currentMirrorIds.push_back(item.mirrorId);
             }
+
+            mirrorPlacements.try_emplace(item.mirrorId, MirrorGroupPlacement{ &group, &item });
         }
     }
 
-    if (currentMirrorIds != s_lastActiveMirrorIds) {
-        std::vector<MirrorConfig> activeMirrorsForCapture;
-        activeMirrorsForCapture.reserve(currentMirrorIds.size());
-        for (const auto& mirrorId : currentMirrorIds) {
-            for (const auto& mirror : cfg.mirrors) {
-                if (mirror.name == mirrorId) {
-                    MirrorConfig activeMirror = mirror;
+    std::vector<MirrorConfig> activeMirrorsForCapture;
+    activeMirrorsForCapture.reserve(currentMirrorIds.size());
+    for (const auto& mirrorId : currentMirrorIds) {
+        auto mirrorIt = s_mirrorByName.find(mirrorId);
+        if (mirrorIt == s_mirrorByName.end() || !mirrorIt->second) {
+            continue;
+        }
 
-                    for (const auto& groupName : mode->mirrorGroupIds) {
-                        for (const auto& group : cfg.mirrorGroups) {
-                            if (group.name == groupName) {
-                                for (const auto& item : group.mirrors) {
-                                    if (!item.enabled) continue;
-                                    if (item.mirrorId == mirrorId) {
-                                        int groupX = group.output.x;
-                                        int groupY = group.output.y;
-                                        if (group.output.useRelativePosition) {
-                                            int screenW = GetCachedWindowWidth();
-                                            int screenH = GetCachedWindowHeight();
-                                            groupX = static_cast<int>(group.output.relativeX * screenW);
-                                            groupY = static_cast<int>(group.output.relativeY * screenH);
-                                        }
-                                        activeMirror.output.x = groupX + item.offsetX;
-                                        activeMirror.output.y = groupY + item.offsetY;
-                                        activeMirror.output.relativeTo = group.output.relativeTo;
-                                        activeMirror.output.useRelativePosition = group.output.useRelativePosition;
-                                        activeMirror.output.relativeX = group.output.relativeX;
-                                        activeMirror.output.relativeY = group.output.relativeY;
-                                        if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
-                                            activeMirror.output.separateScale = true;
-                                            float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
-                                            float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
-                                            activeMirror.output.scaleX = baseScaleX * item.widthPercent;
-                                            activeMirror.output.scaleY = baseScaleY * item.heightPercent;
-                                        }
-                                        break;
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
+        const MirrorConfig& mirror = *mirrorIt->second;
+        MirrorConfig activeMirror = mirror;
 
-                    activeMirrorsForCapture.push_back(activeMirror);
-                    break;
-                }
+        auto placementIt = mirrorPlacements.find(mirrorId);
+        if (placementIt != mirrorPlacements.end() && placementIt->second.group && placementIt->second.item) {
+            const MirrorGroupConfig& group = *placementIt->second.group;
+            const MirrorGroupItem& item = *placementIt->second.item;
+
+            int groupX = group.output.x;
+            int groupY = group.output.y;
+            if (group.output.useRelativePosition) {
+                int screenW = GetCachedWindowWidth();
+                int screenH = GetCachedWindowHeight();
+                groupX = static_cast<int>(group.output.relativeX * screenW);
+                groupY = static_cast<int>(group.output.relativeY * screenH);
+            }
+            activeMirror.output.x = groupX + item.offsetX;
+            activeMirror.output.y = groupY + item.offsetY;
+            activeMirror.output.relativeTo = group.output.relativeTo;
+            activeMirror.output.useRelativePosition = group.output.useRelativePosition;
+            activeMirror.output.relativeX = group.output.relativeX;
+            activeMirror.output.relativeY = group.output.relativeY;
+            if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
+                activeMirror.output.separateScale = true;
+                float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
+                float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
+                activeMirror.output.scaleX = baseScaleX * item.widthPercent;
+                activeMirror.output.scaleY = baseScaleY * item.heightPercent;
             }
         }
-        UpdateMirrorCaptureConfigs(activeMirrorsForCapture);
-        s_lastActiveMirrorIds = currentMirrorIds;
+
+        activeMirrorsForCapture.push_back(activeMirror);
     }
+    UpdateMirrorCaptureConfigs(activeMirrorsForCapture);
+    s_lastActiveMirrorIds = currentMirrorIds;
 
     s_lastMirrorConfigModeId = currentModeId;
     s_lastMirrorConfigSnapshotVersion = snapVer;
@@ -295,7 +317,7 @@ void UpdateCachedScreenMetrics() {
             beforeModeH = currentModeBefore->height;
         }
 
-        RecalculateExpressionDimensions();
+        RecalculateModeDimensions();
 
         int afterModeW = 0;
         int afterModeH = 0;
@@ -320,10 +342,14 @@ void UpdateCachedScreenMetrics() {
             }
         }
 
+        const bool fullscreenStretchMode = EqualsIgnoreCase(currentModeId, "Fullscreen");
         const bool shouldEnforceForExternalResize = clientSizeDiffersFromMode;
-        const bool shouldEnforceModeSize = startupShouldRunNow || modeSizeChanged || shouldEnforceForExternalResize;
+        const bool shouldSendStartupWmSize = startupShouldRunNow;
+        const bool shouldSendFullscreenModeSize = fullscreenStretchMode && modeSizeChanged;
+        const bool shouldEnforceModeSize = !fullscreenStretchMode && (modeSizeChanged || shouldEnforceForExternalResize);
+        const bool shouldSendWmSize = shouldSendStartupWmSize || shouldSendFullscreenModeSize || shouldEnforceModeSize;
 
-        if (afterModeW > 0 && afterModeH > 0 && shouldEnforceModeSize && IsResolutionChangeSupported(g_gameVersion)) {
+        if (afterModeW > 0 && afterModeH > 0 && shouldSendWmSize && IsResolutionChangeSupported(g_gameVersion)) {
             HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
             if (hwnd) { RequestWindowClientResize(hwnd, afterModeW, afterModeH, "logic_thread:screen_metrics"); }
         }
@@ -424,10 +450,17 @@ void UpdateCachedViewportMode() {
         cache.width = mode->width;
         cache.height = mode->height;
         cache.stretchEnabled = mode->stretch.enabled;
-        cache.stretchX = mode->stretch.x;
-        cache.stretchY = mode->stretch.y;
-        cache.stretchWidth = mode->stretch.width;
-        cache.stretchHeight = mode->stretch.height;
+        if (mode->stretch.enabled && EqualsIgnoreCase(mode->id, "Fullscreen")) {
+            cache.stretchX = 0;
+            cache.stretchY = 0;
+            cache.stretchWidth = screenW;
+            cache.stretchHeight = screenH;
+        } else {
+            cache.stretchX = mode->stretch.x;
+            cache.stretchY = mode->stretch.y;
+            cache.stretchWidth = mode->stretch.width;
+            cache.stretchHeight = mode->stretch.height;
+        }
         cache.valid = true;
     } else {
         cache.valid = false;
@@ -537,17 +570,17 @@ void ProcessPendingDimensionChange() {
 
     ModeConfig* mode = GetModeMutable(g_pendingDimensionChange.modeId);
     if (mode) {
+        const bool fullscreenStretchMode = EqualsIgnoreCase(mode->id, "Fullscreen");
+
         if (g_pendingDimensionChange.newWidth > 0) {
             mode->width = EqualsIgnoreCase(mode->id, "Thin") ? (std::max)(330, g_pendingDimensionChange.newWidth)
                                                                : g_pendingDimensionChange.newWidth;
             mode->manualWidth = mode->width;
-            mode->widthExpr.clear();
             mode->relativeWidth = -1.0f;
         }
         if (g_pendingDimensionChange.newHeight > 0) {
             mode->height = g_pendingDimensionChange.newHeight;
             mode->manualHeight = mode->height;
-            mode->heightExpr.clear();
             mode->relativeHeight = -1.0f;
         }
 
@@ -560,14 +593,23 @@ void ProcessPendingDimensionChange() {
         const bool hasRelativeHeight = (mode->relativeHeight >= 0.0f && mode->relativeHeight <= 1.0f);
         if (!hasRelativeWidth && !hasRelativeHeight) { mode->useRelativeSize = false; }
 
+        if (fullscreenStretchMode) {
+            int currentClientW = GetCachedWindowWidth();
+            int currentClientH = GetCachedWindowHeight();
+            if (currentClientW < 1) currentClientW = 1;
+            if (currentClientH < 1) currentClientH = 1;
+            mode->stretch.enabled = true;
+            mode->stretch.x = 0;
+            mode->stretch.y = 0;
+            mode->stretch.width = currentClientW;
+            mode->stretch.height = currentClientH;
+        }
+
         ModeConfig* eyezoomMode = GetModeMutable("EyeZoom");
         ModeConfig* preemptiveMode = GetModeMutable("Preemptive");
         bool preemptiveWasResynced = false;
         if (eyezoomMode && preemptiveMode) {
-            if (!preemptiveMode->widthExpr.empty() || !preemptiveMode->heightExpr.empty() || preemptiveMode->useRelativeSize ||
-                preemptiveMode->relativeWidth >= 0.0f || preemptiveMode->relativeHeight >= 0.0f) {
-                preemptiveMode->widthExpr.clear();
-                preemptiveMode->heightExpr.clear();
+            if (preemptiveMode->useRelativeSize || preemptiveMode->relativeWidth >= 0.0f || preemptiveMode->relativeHeight >= 0.0f) {
                 preemptiveMode->useRelativeSize = false;
                 preemptiveMode->relativeWidth = -1.0f;
                 preemptiveMode->relativeHeight = -1.0f;
@@ -586,7 +628,7 @@ void ProcessPendingDimensionChange() {
             }
         }
 
-        if (g_pendingDimensionChange.sendWmSize && g_currentModeId == g_pendingDimensionChange.modeId) {
+        if (g_pendingDimensionChange.sendWmSize && !fullscreenStretchMode && g_currentModeId == g_pendingDimensionChange.modeId) {
             HWND hwnd = g_minecraftHwnd.load();
             if (hwnd) { RequestWindowClientResize(hwnd, mode->width, mode->height, "logic_thread:pending_dimension"); }
         }

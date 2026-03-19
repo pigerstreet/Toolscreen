@@ -17,7 +17,7 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
 
         std::string delete_img_label = "X##delete_image_" + std::to_string(i);
         if (ImGui::Button(delete_img_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
-            std::string img_popup_id = "Delete Image?##" + std::to_string(i);
+            std::string img_popup_id = (tr("images.delete_images") + "##" + std::to_string(i));
             ImGui::OpenPopup(img_popup_id.c_str());
         }
 
@@ -43,6 +43,22 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
         bool node_open = ImGui::TreeNodeEx("##image_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", img.name.c_str());
 
         if (node_open) {
+            if (img.relativeTo == "topLeft") {
+                img.relativeTo = "topLeftScreen";
+                g_configIsDirty = true;
+            } else if (img.relativeTo == "topRight") {
+                img.relativeTo = "topRightScreen";
+                g_configIsDirty = true;
+            } else if (img.relativeTo == "bottomLeft") {
+                img.relativeTo = "bottomLeftScreen";
+                g_configIsDirty = true;
+            } else if (img.relativeTo == "bottomRight") {
+                img.relativeTo = "bottomRightScreen";
+                g_configIsDirty = true;
+            } else if (img.relativeTo == "center") {
+                img.relativeTo = "centerScreen";
+                g_configIsDirty = true;
+            }
 
             bool hasDuplicate = HasDuplicateImageName(img.name, i);
             if (hasDuplicate) {
@@ -117,7 +133,7 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
             }
 
             ImGui::Columns(2, "img_render", false);
-            ImGui::SetColumnWidth(0, 120);
+            ImGui::SetColumnWidth(0, 150);
             ImGui::Text(trc("label.x"));
             ImGui::NextColumn();
             if (Spinner("##img_x", &img.x)) g_configIsDirty = true;
@@ -126,19 +142,58 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
             ImGui::NextColumn();
             if (Spinner("##img_y", &img.y)) g_configIsDirty = true;
             ImGui::NextColumn();
+            if (!img.relativeSizing && (img.width <= 0 || img.height <= 0)) {
+                int seededWidth = 0;
+                int seededHeight = 0;
+                CalculateImageDimensions(img, seededWidth, seededHeight);
+                img.width = seededWidth;
+                img.height = seededHeight;
+                g_configIsDirty = true;
+            }
+            ImGui::Text(trc("label.width"));
+            ImGui::NextColumn();
+            ImGui::BeginDisabled(img.relativeSizing);
+            if (Spinner("##img_width", &img.width, 1, 1)) g_configIsDirty = true;
+            ImGui::EndDisabled();
+            ImGui::NextColumn();
+            ImGui::Text(trc("label.height"));
+            ImGui::NextColumn();
+            ImGui::BeginDisabled(img.relativeSizing);
+            if (Spinner("##img_height", &img.height, 1, 1)) g_configIsDirty = true;
+            ImGui::EndDisabled();
+            ImGui::NextColumn();
+            ImGui::Text(trc("images.relative_sizing"));
+            const bool relativeSizingLabelHovered = ImGui::IsItemHovered();
+            ImGui::NextColumn();
+            if (ImGui::Checkbox("##img_relative_sizing", &img.relativeSizing)) {
+                if (!img.relativeSizing && (img.width <= 0 || img.height <= 0)) {
+                    int seededWidth = 0;
+                    int seededHeight = 0;
+                    CalculateImageDimensions(img, seededWidth, seededHeight);
+                    img.width = seededWidth;
+                    img.height = seededHeight;
+                }
+                g_configIsDirty = true;
+            }
+            if (relativeSizingLabelHovered || ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(trc("images.tooltip.relative_sizing"));
+            }
+            ImGui::NextColumn();
             ImGui::Text(trc("label.scale"));
             ImGui::NextColumn();
+            ImGui::BeginDisabled(!img.relativeSizing);
             float scalePercent = img.scale * 100.0f;
             ImGui::SetNextItemWidth(250);
-            if (ImGui::SliderFloat("##img_scale", &scalePercent, 10.0f, 200.0f, "%.0f%%")) {
+            if (ImGui::SliderFloat("##img_scale", &scalePercent, 10.0f, 300.0f, "%.0f%%")) {
                 img.scale = scalePercent / 100.0f;
                 g_configIsDirty = true;
             }
+            ImGui::EndDisabled();
             ImGui::NextColumn();
             ImGui::Text(trc("label.relative_to"));
             ImGui::NextColumn();
             const char* current_rel_to = getFriendlyName(img.relativeTo, imageRelativeToOptions);
-            ImGui::SetNextItemWidth(150);
+            ImGui::SetNextItemWidth(180);
             if (ImGui::BeginCombo("##img_rel_to", current_rel_to)) {
                 for (const auto& option : imageRelativeToOptions) {
                     if (ImGui::Selectable(option.second, img.relativeTo == option.first)) {
@@ -265,6 +320,7 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
     if (ImGui::Button(trc("button.add_image"))) {
         ImageConfig newImg;
         newImg.name = tr("images.new_image") + " " + std::to_string(g_config.images.size() + 1);
+        newImg.relativeSizing = true;
         newImg.relativeTo = "centerViewport";
         g_config.images.push_back(newImg);
         g_configIsDirty = true;

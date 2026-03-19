@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -13,6 +14,8 @@
 // Background thread aggregates and processes timing data
 class Profiler {
   public:
+    class ScopedTimer;
+
     struct ProfileEntry {
         std::string displayName;
         double totalTime = 0.0;
@@ -25,6 +28,7 @@ class Profiler {
         int frameCount = 0;
         double rollingAverageTime = 0.0;
         double rollingSelfTime = 0.0;
+        double rollingAverageCalls = 0.0;
 
         double maxTimeInLastSecond = 0.0;
 
@@ -41,10 +45,11 @@ class Profiler {
     // Minimal timing event for lock-free submission
     struct TimingEvent {
         const char* sectionName;
-        const char* parentName;
+        std::array<const char*, 24> scopeNames{};
         double durationMs;
         uint32_t threadId;       // Thread that generated this event
         uint8_t depth;
+        uint8_t scopeDepth;
         bool isRenderThread;     // Whether from render thread
     };
 
@@ -61,6 +66,9 @@ class Profiler {
 
         // Scope stack for hierarchy tracking (thread-local, no sync needed)
         std::vector<const char*> scopeStack;
+        std::vector<ScopedTimer*> activeTimers;
+        int pauseDepth = 0;
+        std::chrono::high_resolution_clock::time_point pauseStartTime{};
     };
 
     // RAII timing helper class - completely lock-free
@@ -73,10 +81,25 @@ class Profiler {
         ScopedTimer& operator=(const ScopedTimer&) = delete;
 
       private:
+        friend class Profiler;
+
         const char* m_sectionName;
         std::chrono::high_resolution_clock::time_point m_startTime;
+        std::chrono::nanoseconds m_pausedTime{ 0 };
         uint8_t m_depth;
         bool m_active;
+    };
+
+    class ScopedPause {
+      public:
+        explicit ScopedPause(Profiler& profiler);
+        ~ScopedPause();
+
+        ScopedPause(const ScopedPause&) = delete;
+        ScopedPause& operator=(const ScopedPause&) = delete;
+
+      private:
+        Profiler* m_profiler;
     };
 
     static Profiler& GetInstance();
@@ -86,7 +109,7 @@ class Profiler {
     void MarkAsRenderThread();
 
     // Lock-free event submission (called from ScopedTimer destructor)
-    void SubmitEvent(const char* sectionName, const char* parentName, double durationMs, uint8_t depth);
+    void SubmitEvent(const char* sectionName, double durationMs, uint8_t depth, ThreadRingBuffer& buffer);
 
     void EndFrame();
 
@@ -142,6 +165,8 @@ class Profiler {
     void CalculateHierarchy(std::unordered_map<std::string, ProfileEntry>& entries, double totalTime);
     void BuildDisplayTree(const std::unordered_map<std::string, ProfileEntry>& entries,
                           std::vector<std::pair<std::string, ProfileEntry>>& output);
+    void PauseCurrentThread();
+    void ResumeCurrentThread();
 };
 
 // Convenience macros - completely lock-free on hot path

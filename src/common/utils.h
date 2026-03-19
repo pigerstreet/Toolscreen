@@ -30,6 +30,8 @@ struct MirrorInstance {
     int forceUpdateFrames = 0;
     std::vector<unsigned char> pixelBuffer;
     GLuint tempCaptureTexture = 0;
+    int tempCaptureTextureW = 0;
+    int tempCaptureTextureH = 0;
 
     // Double-buffering for threaded capture
     GLuint fboBack = 0;                      // Back FBO (written by capture thread)
@@ -98,6 +100,8 @@ struct MirrorInstance {
           forceUpdateFrames(other.forceUpdateFrames),
           pixelBuffer(other.pixelBuffer),
           tempCaptureTexture(other.tempCaptureTexture),
+          tempCaptureTextureW(other.tempCaptureTextureW),
+          tempCaptureTextureH(other.tempCaptureTextureH),
           fboBack(other.fboBack),
           fboTextureBack(other.fboTextureBack),
           captureReady(other.captureReady.load(std::memory_order_relaxed)),
@@ -129,6 +133,8 @@ struct MirrorInstance {
           forceUpdateFrames(other.forceUpdateFrames),
           pixelBuffer(std::move(other.pixelBuffer)),
           tempCaptureTexture(other.tempCaptureTexture),
+          tempCaptureTextureW(other.tempCaptureTextureW),
+          tempCaptureTextureH(other.tempCaptureTextureH),
           fboBack(other.fboBack),
           fboTextureBack(other.fboTextureBack),
           captureReady(other.captureReady.load(std::memory_order_relaxed)),
@@ -165,6 +171,8 @@ struct MirrorInstance {
             forceUpdateFrames = other.forceUpdateFrames;
             pixelBuffer = other.pixelBuffer;
             tempCaptureTexture = other.tempCaptureTexture;
+            tempCaptureTextureW = other.tempCaptureTextureW;
+            tempCaptureTextureH = other.tempCaptureTextureH;
             fboBack = other.fboBack;
             fboTextureBack = other.fboTextureBack;
             captureReady.store(other.captureReady.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -201,6 +209,8 @@ struct MirrorInstance {
             forceUpdateFrames = other.forceUpdateFrames;
             pixelBuffer = std::move(other.pixelBuffer);
             tempCaptureTexture = other.tempCaptureTexture;
+            tempCaptureTextureW = other.tempCaptureTextureW;
+            tempCaptureTextureH = other.tempCaptureTextureH;
             fboBack = other.fboBack;
             fboTextureBack = other.fboTextureBack;
             captureReady.store(other.captureReady.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -332,6 +342,8 @@ bool GetWindowClientRectInScreen(HWND hwnd, RECT& outRect);
 
 UINT GetToolscreenBorderlessToggleMessageId();
 bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* source = nullptr);
+bool GetRecentRequestedWindowClientResizes(int& outCurrentW, int& outCurrentH, int& outPreviousW, int& outPreviousH);
+bool CenterWindowedRestoreOnCurrentMonitor(HWND hwnd, const char* source = nullptr);
 void ToggleBorderlessWindowedFullscreen(HWND hwnd);
 bool IsCursorVisible();
 void WriteCurrentModeToFile(const std::string& modeId);

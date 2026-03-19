@@ -243,32 +243,58 @@ void QueueOverlayReload(const std::string& overlayId, const WindowOverlayConfig&
 }
 
 void UpdateAllWindowOverlays() {
-    std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
     auto now = std::chrono::steady_clock::now();
+    struct PendingWindowSearch {
+        std::string overlayId;
+        std::string windowTitle;
+        std::string windowClass;
+        std::string executableName;
+        std::string windowMatchPriority;
+    };
+    std::vector<PendingWindowSearch> searchesToRun;
 
-    for (auto& [overlayId, entry] : g_windowOverlayCache) {
-        HWND target = entry->targetWindow.load(std::memory_order_relaxed);
-        if (target && !IsWindow(target)) {
-            entry->targetWindow.store(NULL, std::memory_order_relaxed);
-            entry->lastSearchTime = now;
-            target = NULL;
-        }
+    {
+        std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
 
-        if (!target) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - entry->lastSearchTime);
-            int interval = entry->searchInterval.load(std::memory_order_relaxed);
-
-            if (elapsed.count() >= interval) {
-                HWND found =
-                    FindWindowByTitleAndClass(entry->windowTitle, entry->windowClass, entry->executableName, entry->windowMatchPriority);
-                entry->targetWindow.store(found, std::memory_order_relaxed);
+        for (auto& [overlayId, entry] : g_windowOverlayCache) {
+            HWND target = entry->targetWindow.load(std::memory_order_relaxed);
+            if (target && !IsWindow(target)) {
+                entry->targetWindow.store(NULL, std::memory_order_relaxed);
                 entry->lastSearchTime = now;
+                target = NULL;
+            }
 
-                if (found) {
-                    Log("Reacquired target window for overlay '" + overlayId + "'");
-                    entry->needsUpdate.store(true, std::memory_order_relaxed);
+            if (!target) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - entry->lastSearchTime);
+                int interval = entry->searchInterval.load(std::memory_order_relaxed);
+
+                if (elapsed.count() >= interval) {
+                    searchesToRun.push_back(
+                        { overlayId, entry->windowTitle, entry->windowClass, entry->executableName, entry->windowMatchPriority });
+                    entry->lastSearchTime = now;
                 }
             }
+        }
+    }
+
+    for (const auto& search : searchesToRun) {
+        HWND found = FindWindowByTitleAndClass(search.windowTitle, search.windowClass, search.executableName, search.windowMatchPriority);
+
+        std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
+        auto it = g_windowOverlayCache.find(search.overlayId);
+        if (it == g_windowOverlayCache.end() || !it->second) { continue; }
+
+        WindowOverlayCacheEntry& entry = *it->second;
+        if (entry.windowTitle != search.windowTitle || entry.windowClass != search.windowClass ||
+            entry.executableName != search.executableName || entry.windowMatchPriority != search.windowMatchPriority) {
+            continue;
+        }
+
+        entry.targetWindow.store(found, std::memory_order_relaxed);
+
+        if (found) {
+            Log("Reacquired target window for overlay '" + search.overlayId + "'");
+            entry.needsUpdate.store(true, std::memory_order_relaxed);
         }
     }
 }

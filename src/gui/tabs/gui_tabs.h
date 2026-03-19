@@ -2,6 +2,7 @@
 
 
 #include "features/fake_cursor.h"
+#include "features/browser_overlay.h"
 #include "gui/gui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -30,6 +31,8 @@ void HelpMarker(const char* desc);
 
 bool Spinner(const char* id_label, int* v, int step = 1, int min_val = INT_MIN, int max_val = INT_MAX, float inputWidth = 80.0f,
              float margin = 0.0f);
+bool SpinnerDeferredTextInput(const char* id_label, int* v, int step = 1, int min_val = INT_MIN, int max_val = INT_MAX,
+                              float inputWidth = 80.0f, float margin = 0.0f);
 
 bool SpinnerFloat(const char* id_label, float* v, float step = 0.1f, float min_val = 0.0f, float max_val = FLT_MAX,
                   const char* format = "%.1f");
@@ -121,6 +124,7 @@ bool HasDuplicateModeName(const std::string& name, size_t currentIndex);
 bool HasDuplicateMirrorName(const std::string& name, size_t currentIndex);
 bool HasDuplicateImageName(const std::string& name, size_t currentIndex);
 bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex);
+bool HasDuplicateBrowserOverlayName(const std::string& name, size_t currentIndex);
 bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex);
 
 
@@ -132,6 +136,7 @@ std::vector<ModeConfig> GetDefaultModes();
 std::vector<MirrorConfig> GetDefaultMirrors();
 std::vector<ImageConfig> GetDefaultImages();
 std::vector<WindowOverlayConfig> GetDefaultWindowOverlays();
+std::vector<BrowserOverlayConfig> GetDefaultBrowserOverlays();
 std::vector<HotkeyConfig> GetDefaultHotkeys();
 CursorsConfig GetDefaultCursors();
 EyeZoomConfig GetDefaultEyeZoomConfig();
@@ -157,6 +162,7 @@ void RenderModesTab();
 void RenderMirrorsTab();
 void RenderImagesTab();
 void RenderWindowOverlaysTab();
+void RenderBrowserOverlaysTab();
 void RenderHotkeysTab();
 void RenderMouseTab();
 void RenderSettingsTab();

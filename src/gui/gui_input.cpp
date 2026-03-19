@@ -20,6 +20,30 @@ static std::atomic<DWORD> g_bindingInputEventVk{ 0 };
 static std::atomic<LPARAM> g_bindingInputEventLParam{ 0 };
 static std::atomic<bool> g_bindingInputEventIsMouse{ false };
 
+static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
+static constexpr ULONG_PTR kToolscreenMenuMaskExtraInfo = (ULONG_PTR)0x54534D4B;
+static constexpr WORD kToolscreenMenuMaskVk = 0xFF;
+
+static bool IsMenuActivationModifierVk(DWORD vk) {
+    return vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
+}
+
+static bool SendSynthKeyByVirtualKey(WORD virtualKey, bool keyDown, ULONG_PTR extraInfo) {
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = virtualKey;
+    in.ki.wScan = 0;
+    in.ki.dwFlags = keyDown ? 0 : KEYEVENTF_KEYUP;
+    in.ki.time = 0;
+    in.ki.dwExtraInfo = extraInfo;
+    return ::SendInput(1, &in, sizeof(INPUT)) == 1;
+}
+
+static void SendMenuMaskKeyTap() {
+    (void)SendSynthKeyByVirtualKey(kToolscreenMenuMaskVk, true, kToolscreenMenuMaskExtraInfo);
+    (void)SendSynthKeyByVirtualKey(kToolscreenMenuMaskVk, false, kToolscreenMenuMaskExtraInfo);
+}
+
 static std::mutex g_imagePickerMutex;
 static std::map<std::string, ImagePickerResult> g_imagePickerResults;
 static std::map<std::string, std::future<ImagePickerResult>> g_imagePickerFutures;
@@ -44,8 +68,13 @@ bool IsHotkeyBindingActive_UiState() {
 }
 
 void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
-    if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && GetMessageExtraInfo() == kToolscreenInjectedExtraInfo) {
+    if (!IsHotkeyBindingActive_UiState() && !IsHotkeyBindingActive() && !IsRebindBindingActive()) {
+        return;
+    }
+
+    const ULONG_PTR extraInfo = GetMessageExtraInfo();
+    if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) &&
+        (extraInfo == kToolscreenInjectedExtraInfo || extraInfo == kToolscreenMenuMaskExtraInfo)) {
         return;
     }
 
@@ -118,6 +147,9 @@ void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_SYSKEYDOWN:
         if ((lParam & (1LL << 30)) != 0) return;
         vk = resolveVkFromKeyboardMessage(wParam, lParam);
+        if (IsMenuActivationModifierVk(vk)) {
+            SendMenuMaskKeyTap();
+        }
         break;
     case WM_LBUTTONDOWN:
         return;

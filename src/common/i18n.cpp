@@ -94,6 +94,42 @@ bool LoadTranslation(const std::string& lang) {
     return true;
 }
 
+std::vector<ImWchar> BuildTranslationGlyphRanges() {
+    static constexpr ImWchar kAsciiFallbackRange[] = { 0x0020, 0x00FF, 0 };
+
+    ImFontGlyphRangesBuilder builder;
+    if (ImGui::GetCurrentContext() != nullptr) {
+        builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesDefault());
+    } else {
+        builder.AddRanges(kAsciiFallbackRange);
+    }
+
+    auto addJsonStrings = [&builder](const nlohmann::json& json) {
+        if (!json.is_object()) {
+            return;
+        }
+
+        for (const auto& [key, value] : json.items()) {
+            (void)key;
+            if (!value.is_string()) {
+                continue;
+            }
+
+            const auto& text = value.get_ref<const std::string&>();
+            if (!text.empty()) {
+                builder.AddText(text.c_str());
+            }
+        }
+    };
+
+    addJsonStrings(g_langsJson);
+    addJsonStrings(g_translationJson);
+
+    ImVector<ImWchar> imguiRanges;
+    builder.BuildRanges(&imguiRanges);
+    return std::vector<ImWchar>(imguiRanges.Data, imguiRanges.Data + imguiRanges.Size);
+}
+
 std::string tr(const char* key) {
     auto cacheIt = g_translationCache.find(key);
     if (cacheIt != g_translationCache.end()) {

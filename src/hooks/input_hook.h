@@ -15,6 +15,8 @@ inline constexpr UINT WM_TOOLSCREEN_CHAR_NO_REBIND = WM_APP + 0x2A1;
 // Custom messages: treat payload as WM_KEYDOWN/WM_KEYUP without running HandleKeyRebinding.
 inline constexpr UINT WM_TOOLSCREEN_KEYDOWN_NO_REBIND = WM_APP + 0x2A2;
 inline constexpr UINT WM_TOOLSCREEN_KEYUP_NO_REBIND = WM_APP + 0x2A3;
+inline constexpr UINT WM_TOOLSCREEN_APPLY_FOCUS_REGAIN_SIZE = WM_APP + 0x2A4;
+inline constexpr UINT WM_TOOLSCREEN_REFRESH_KEY_REPEAT = WM_APP + 0x2A5;
 
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam);
 
@@ -53,7 +55,7 @@ InputHandlerResult HandleWindowOverlayMouse(HWND hWnd, UINT uMsg, WPARAM wParam,
 // Block all input when GUI is open
 InputHandlerResult HandleGuiInputBlocking(UINT uMsg);
 
-InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId);
+InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId,
                                  const std::string& gameState);
@@ -67,6 +69,11 @@ InputHandlerResult HandleCustomKeyNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam, 
 InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
+void ResetMouseMovementThrottleState();
+bool ConsumePendingRawMouseMovementThrottleInjection(HRAWINPUT rawInputHandle, LONG& pendingX, LONG& pendingY);
+
+void ReleaseActiveLowLevelRebindKeys(HWND hWnd);
 
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 

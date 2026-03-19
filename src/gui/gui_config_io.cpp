@@ -1,6 +1,6 @@
 #include "gui_internal.h"
 
-#include "common/expression_parser.h"
+#include "common/mode_dimensions.h"
 #include "common/profiler.h"
 #include "common/utils.h"
 #include "config/config_toml.h"
@@ -54,6 +54,69 @@ std::string BackgroundTransitionTypeToString(BackgroundTransitionType type) {
 }
 
 BackgroundTransitionType StringToBackgroundTransitionType(const std::string&) { return BackgroundTransitionType::Cut; }
+
+bool RemoveInvalidHotkeyModeReferences(Config& config) {
+    auto modeExists = [&](const std::string& modeId) -> bool {
+        if (modeId.empty()) { return false; }
+        for (const auto& mode : config.modes) {
+            if (EqualsIgnoreCase(mode.id, modeId)) { return true; }
+        }
+        return false;
+    };
+
+    std::string fallbackMainMode;
+    if (modeExists(config.defaultMode)) {
+        fallbackMainMode = config.defaultMode;
+    } else if (modeExists("Fullscreen")) {
+        fallbackMainMode = "Fullscreen";
+    } else if (!config.modes.empty()) {
+        fallbackMainMode = config.modes.front().id;
+    }
+
+    bool changed = false;
+    size_t mainModeResetCount = 0;
+    size_t secondaryModeClearedCount = 0;
+    size_t altModeRemovedCount = 0;
+    for (auto& hotkey : config.hotkeys) {
+        if (hotkey.mainMode.empty()) {
+            if (!fallbackMainMode.empty()) {
+                hotkey.mainMode = fallbackMainMode;
+                changed = true;
+                ++mainModeResetCount;
+            }
+        } else if (!modeExists(hotkey.mainMode)) {
+            if (hotkey.mainMode != fallbackMainMode) {
+                hotkey.mainMode = fallbackMainMode;
+                changed = true;
+                ++mainModeResetCount;
+            }
+        }
+
+        if (!hotkey.secondaryMode.empty() && !modeExists(hotkey.secondaryMode)) {
+            hotkey.secondaryMode.clear();
+            changed = true;
+            ++secondaryModeClearedCount;
+        }
+
+        const auto newEnd = std::remove_if(hotkey.altSecondaryModes.begin(), hotkey.altSecondaryModes.end(),
+                                           [&](const AltSecondaryMode& alt) {
+                                               return !alt.mode.empty() && !modeExists(alt.mode);
+                                           });
+        if (newEnd != hotkey.altSecondaryModes.end()) {
+            altModeRemovedCount += static_cast<size_t>(std::distance(newEnd, hotkey.altSecondaryModes.end()));
+            hotkey.altSecondaryModes.erase(newEnd, hotkey.altSecondaryModes.end());
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        Log("Sanitized hotkey mode references: reset " + std::to_string(mainModeResetCount) + " main mode reference(s), cleared " +
+            std::to_string(secondaryModeClearedCount) + " secondary mode reference(s), removed " +
+            std::to_string(altModeRemovedCount) + " alt mode reference(s).");
+    }
+
+    return changed;
+}
 
 void CopyToClipboard(HWND hwnd, const std::string& text) {
     if (!OpenClipboard(hwnd)) {
@@ -243,6 +306,10 @@ std::vector<WindowOverlayConfig> GetDefaultWindowOverlays() {
     return std::vector<WindowOverlayConfig>();
 }
 
+std::vector<BrowserOverlayConfig> GetDefaultBrowserOverlays() {
+    return std::vector<BrowserOverlayConfig>();
+}
+
 std::vector<HotkeyConfig> GetDefaultHotkeys() { return GetDefaultHotkeysFromEmbedded(); }
 CursorsConfig GetDefaultCursors() { return GetDefaultCursorsFromEmbedded(); }
 
@@ -300,8 +367,7 @@ void WriteDefaultConfig(const std::wstring& path) {
         int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         ReleaseDC(NULL, hdc);
         int systemCursorSize = GetSystemMetricsForDpi(SM_CYCURSOR, dpi);
-        if (systemCursorSize < 16) systemCursorSize = 16;
-        if (systemCursorSize > 320) systemCursorSize = 320;
+        systemCursorSize = std::clamp(systemCursorSize, ConfigDefaults::CURSOR_MIN_SIZE, ConfigDefaults::CURSOR_MAX_SIZE);
         defaultConfig.cursors.title.cursorSize = systemCursorSize;
         defaultConfig.cursors.wall.cursorSize = systemCursorSize;
         defaultConfig.cursors.ingame.cursorSize = systemCursorSize;
@@ -459,8 +525,6 @@ void LoadConfig() {
                 preemptiveMode.manualWidth = eyezoomModePtr ? eyezoomModePtr->manualWidth : preemptiveMode.width;
                 preemptiveMode.manualHeight = eyezoomModePtr ? eyezoomModePtr->manualHeight : preemptiveMode.height;
                 preemptiveMode.useRelativeSize = false;
-                preemptiveMode.widthExpr.clear();
-                preemptiveMode.heightExpr.clear();
                 preemptiveMode.relativeWidth = -1.0f;
                 preemptiveMode.relativeHeight = -1.0f;
                 g_config.modes.push_back(preemptiveMode);
@@ -476,11 +540,6 @@ void LoadConfig() {
 
                 if (preemptiveModePtr) {
                     bool changed = false;
-                    if (!preemptiveModePtr->widthExpr.empty() || !preemptiveModePtr->heightExpr.empty()) {
-                        preemptiveModePtr->widthExpr.clear();
-                        preemptiveModePtr->heightExpr.clear();
-                        changed = true;
-                    }
                     if (preemptiveModePtr->relativeWidth >= 0.0f || preemptiveModePtr->relativeHeight >= 0.0f ||
                         preemptiveModePtr->useRelativeSize) {
                         preemptiveModePtr->relativeWidth = -1.0f;
@@ -551,8 +610,8 @@ void LoadConfig() {
         }
 
         for (auto& mode : g_config.modes) {
-            bool widthIsRelative = mode.widthExpr.empty() && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
-            bool heightIsRelative = mode.heightExpr.empty() && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
+            bool widthIsRelative = mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
+            bool heightIsRelative = mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
 
             if (widthIsRelative && hasClientMetrics) {
                 mode.width = static_cast<int>(std::lround(mode.relativeWidth * static_cast<float>(clientWidth)));
@@ -572,19 +631,21 @@ void LoadConfig() {
                 const int targetW = hasClientMetrics ? clientWidth : screenWidth;
                 const int targetH = hasClientMetrics ? clientHeight : screenHeight;
 
-                if (!mode.useRelativeSize || mode.relativeWidth != 1.0f || mode.relativeHeight != 1.0f) {
-                    mode.useRelativeSize = true;
-                    mode.relativeWidth = 1.0f;
-                    mode.relativeHeight = 1.0f;
-                    g_configIsDirty = true;
-                }
-
-                if (targetW > 0 && mode.width != targetW) {
+                if (targetW > 0 && mode.width < 1) {
                     mode.width = targetW;
                     g_configIsDirty = true;
                 }
-                if (targetH > 0 && mode.height != targetH) {
+                if (targetH > 0 && mode.height < 1) {
                     mode.height = targetH;
+                    g_configIsDirty = true;
+                }
+
+                if (mode.manualWidth < 1 && mode.width > 0) {
+                    mode.manualWidth = mode.width;
+                    g_configIsDirty = true;
+                }
+                if (mode.manualHeight < 1 && mode.height > 0) {
+                    mode.manualHeight = mode.height;
                     g_configIsDirty = true;
                 }
 
@@ -600,9 +661,7 @@ void LoadConfig() {
             }
         }
 
-        for (auto& hotkey : g_config.hotkeys) {
-            if (hotkey.mainMode.empty()) { hotkey.mainMode = g_config.defaultMode; }
-        }
+        if (RemoveInvalidHotkeyModeReferences(g_config)) { g_configIsDirty = true; }
 
         ResetAllHotkeySecondaryModes();
 
@@ -629,9 +688,8 @@ void LoadConfig() {
 
             if (loadedConfigVersion == 1 && currentConfigVersion >= 2) {
                 g_config.disableHookChaining = false;
-                g_config.hookChainingNextTarget = HookChainingNextTarget::OriginalFunction;
                 g_configIsDirty = true;
-                Log("Applied v2 migration: disableHookChaining=false, hookChainingNextTarget=Original");
+                Log("Applied v2 migration: disableHookChaining=false");
             }
 
             g_config.configVersion = currentConfigVersion;
@@ -670,7 +728,7 @@ void LoadConfig() {
             HWND startupHwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
             const bool hasValidStartupClient = GetWindowClientRectInScreen(startupHwnd, startupClientRect);
             if (hasValidStartupClient) {
-                RecalculateExpressionDimensions();
+                RecalculateModeDimensions();
             } else {
                 Log("Deferring mode dimension recalculation until game client size is valid.");
             }

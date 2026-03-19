@@ -47,6 +47,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 std::string WideToUtf8(const std::wstring& wide_string);
 void HandleImGuiContextReset();
 void InitializeImGuiContext(HWND hwnd);
+std::recursive_mutex& GetImGuiContextMutex();
 void StartSupportersFetch();
 bool IsGuiHotkeyPressed(WPARAM wParam);
 bool IsHotkeyBindingActive();
@@ -58,6 +59,10 @@ std::vector<DWORD> ParseHotkeyString(const std::string& hotkeyStr);
 void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam);
 uint64_t GetLatestBindingInputSequence();
 bool ConsumeBindingInputEventSince(uint64_t& lastSeenSequence, DWORD& outVk, LPARAM& outLParam, bool& outIsMouseButton);
+void RequestDynamicGuiFontRefresh(bool forceRefresh = false);
+void ApplyDynamicGuiFontRefresh();
+void RequestKeyboardLayoutFontRefresh(const ImVec2& windowSize, float keyHeight, float keyboardScale, bool forceRefresh = false);
+void ApplyPendingKeyboardLayoutFontRefresh();
 
 extern ImFont* g_keyboardLayoutPrimaryFont;
 extern ImFont* g_keyboardLayoutSecondaryFont;
@@ -74,6 +79,18 @@ enum class GradientAnimationType {
 struct GradientColorStop {
     Color color = { 0.0f, 0.0f, 0.0f };
     float position = 0.0f;
+};
+
+struct GradientConfig {
+    std::vector<GradientColorStop> gradientStops = {
+        { { 0.0f, 0.0f, 0.0f }, 0.0f },
+        { { 1.0f, 1.0f, 1.0f }, 1.0f },
+    };
+    float gradientAngle = 0.0f;
+
+    GradientAnimationType gradientAnimation = GradientAnimationType::None;
+    float gradientAnimationSpeed = 1.0f;
+    bool gradientColorFade = false;
 };
 
 struct BackgroundConfig {
@@ -125,11 +142,6 @@ enum class MirrorBorderShape {
     Circle
 };
 
-enum class HookChainingNextTarget {
-    LatestHook = 0,
-    OriginalFunction = 1,
-};
-
 struct MirrorBorderConfig {
     MirrorBorderType type = MirrorBorderType::Dynamic;
 
@@ -158,6 +170,8 @@ struct MirrorConfig {
     float opacity = 1.0f;
     bool rawOutput = false;
     bool colorPassthrough = false;
+    bool gradientOutput = false;
+    GradientConfig gradient;
     bool onlyOnMyScreen = false;
 };
 struct MirrorGroupItem {
@@ -181,11 +195,6 @@ struct ImageBackgroundConfig {
 struct StretchConfig {
     bool enabled = false;
     int width = 0, height = 0, x = 0, y = 0;
-
-    std::string widthExpr;
-    std::string heightExpr;
-    std::string xExpr;
-    std::string yExpr;
 };
 struct BorderConfig {
     bool enabled = false;
@@ -202,6 +211,9 @@ struct ImageConfig {
     std::string path;
     int x = 0, y = 0;
     float scale = 1.0f;
+    bool relativeSizing = true;
+    int width = 0;
+    int height = 0;
     std::string relativeTo = "topLeftScreen";
     int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
     bool enableColorKey = false;
@@ -239,6 +251,30 @@ struct WindowOverlayConfig {
     bool enableInteraction = false;
     BorderConfig border;
 };
+struct BrowserOverlayConfig {
+    std::string name;
+    std::string url = "https://example.com";
+    std::string customCss;
+    int browserWidth = 1280;
+    int browserHeight = 720;
+    int x = 0, y = 0;
+    float scale = 1.0f;
+    std::string relativeTo = "topLeftScreen";
+    int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
+    bool enableColorKey = false;
+    std::vector<ColorKeyConfig> colorKeys;
+    float opacity = 1.0f;
+    ImageBackgroundConfig background;
+    bool pixelatedScaling = false;
+    bool onlyOnMyScreen = false;
+    int fps = 15;
+    bool transparentBackground = false;
+    bool muteAudio = true;
+    bool allowSystemMediaKeys = true;
+    bool reloadOnUpdate = false;
+    int reloadInterval = 0;
+    BorderConfig border;
+};
 
 enum class GameTransitionType {
     Cut,
@@ -268,14 +304,12 @@ struct ModeConfig {
     float relativeWidth = 0.5f;
     float relativeHeight = 0.5f;
 
-    std::string widthExpr;
-    std::string heightExpr;
-
     BackgroundConfig background;
     std::vector<std::string> mirrorIds;
     std::vector<std::string> mirrorGroupIds;
     std::vector<std::string> imageIds;
     std::vector<std::string> windowOverlayIds;
+    std::vector<std::string> browserOverlayIds;
     StretchConfig stretch;
 
     GameTransitionType gameTransition = GameTransitionType::Bounce;
@@ -345,7 +379,6 @@ struct DebugGlobalConfig {
     bool fakeCursor = false;
     bool showTextureGrid = false;
     bool delayRenderingUntilFinished = false;
-    bool delayRenderingUntilBlitted = false;  // Wait on async overlay blit fence before SwapBuffers
     bool virtualCameraEnabled = false;        // Output to OBS Virtual Camera driver
 
     bool logModeSwitch = false;
@@ -426,6 +459,11 @@ struct KeyRebind {
     DWORD customOutputVK = 0;
     DWORD customOutputUnicode = 0;
     DWORD customOutputScanCode = 0;
+    bool baseOutputShifted = false;
+    bool shiftLayerEnabled = false;
+    DWORD shiftLayerOutputVK = 0;
+    DWORD shiftLayerOutputUnicode = 0;
+    bool shiftLayerOutputShifted = false;
 };
 struct KeyRebindsConfig {
     bool enabled = false;
@@ -456,11 +494,12 @@ struct PieSpikeConfig {
 };
 
 struct Config {
-    int configVersion = 2;
+    int configVersion = 3;
     std::vector<MirrorConfig> mirrors;
     std::vector<MirrorGroupConfig> mirrorGroups;
     std::vector<ImageConfig> images;
     std::vector<WindowOverlayConfig> windowOverlays;
+    std::vector<BrowserOverlayConfig> browserOverlays;
     std::vector<ModeConfig> modes;
     std::vector<HotkeyConfig> hotkeys;
     std::vector<SensitivityHotkeyConfig> sensitivityHotkeys;
@@ -480,16 +519,19 @@ struct Config {
     MirrorGammaMode mirrorGammaMode = MirrorGammaMode::Auto;
     // Useful if a specific overlay/driver hook layer is unstable when chained.
     bool disableHookChaining = false;
-    HookChainingNextTarget hookChainingNextTarget = HookChainingNextTarget::OriginalFunction;
     bool allowCursorEscape = false;
     float mouseSensitivity = 1.0f;
+    int mouseMovementPollingRate = ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE;
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)
     bool hideAnimationsInGame = false;
+    bool limitCaptureFramerate = ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE;
+    int obsFramerate = ConfigDefaults::CONFIG_OBS_FRAMERATE;
     KeyRebindsConfig keyRebinds;
     AppearanceConfig appearance;
     PieSpikeConfig pieSpike;
-    int keyRepeatStartDelay = 0;
-    int keyRepeatDelay = 0;
+    int keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
+    int keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
+    bool keyRepeatResumePreviousHeldKey = ConfigDefaults::CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY;
     bool basicModeEnabled = false;
     bool disableFullscreenPrompt = false;
     bool disableConfigurePrompt = false;
@@ -583,8 +625,10 @@ void ResizeHotkeySecondaryModes(size_t count);
 extern std::mutex g_hotkeySecondaryModesMutex;
 extern std::atomic<bool> g_cursorsNeedReload;
 extern std::atomic<bool> g_showGui;
+extern std::atomic<bool> g_wasCursorVisible;
 extern std::atomic<bool> g_imageOverlaysVisible;
 extern std::atomic<bool> g_windowOverlaysVisible;
+extern std::atomic<bool> g_browserOverlaysVisible;
 extern std::string g_currentlyEditingMirror;
 extern std::atomic<HWND> g_minecraftHwnd;
 extern std::wstring g_toolscreenPath;
@@ -721,12 +765,14 @@ void RenderWelcomeToast(bool isFullscreen);
 
 void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC));
 void RenderImGuiWithStateProtection(bool useFullProtection);
+void SyncImGuiDisplayMetrics(HWND hwnd);
 void SaveConfig();
 void SaveConfigImmediate();
 void ApplyAppearanceConfig();
 void SaveTheme();
 void LoadTheme();
 void LoadConfig();
+bool RemoveInvalidHotkeyModeReferences(Config& config);
 void CopyToClipboard(HWND hwnd, const std::string& text);
 
 std::string GameTransitionTypeToString(GameTransitionType type);

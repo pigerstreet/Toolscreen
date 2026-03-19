@@ -3,6 +3,26 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
+    auto drawMirrorColorspaceSetting = []() {
+        const char* gammaModes[] = { trc("settings.mirrors_auto"), trc("settings.mirrors_assume_srgb"), trc("settings.mirrors_assume_linear") };
+        int gm = static_cast<int>(g_config.mirrorGammaMode);
+        ImGui::SetNextItemWidth(250);
+        if (ImGui::Combo(trc("settings.mirrors_match_colorspace"), &gm, gammaModes, IM_ARRAYSIZE(gammaModes))) {
+            g_config.mirrorGammaMode = static_cast<MirrorGammaMode>(gm);
+            g_configIsDirty = true;
+
+            SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
+
+            std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+            for (auto& kv : g_mirrorInstances) {
+                kv.second.forceUpdateFrames = 3;
+                kv.second.hasValidContent = false;
+            }
+        }
+        ImGui::SameLine();
+        HelpMarker(trc("settings.tooltip.colorspace"));
+    };
+
     SliderCtrlClickTip();
 
     ImGui::SeparatorText(trc("settings.performance"));
@@ -23,6 +43,9 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     if (ImGui::Checkbox(trc("settings.hide_animations_in_game"), &g_config.hideAnimationsInGame)) { g_configIsDirty = true; }
     ImGui::SameLine();
     HelpMarker(trc("tooltip.hide_animations_in_game"));
+    if (ImGui::Checkbox(trc("settings.limit_capture_framerate"), &g_config.limitCaptureFramerate)) { g_configIsDirty = true; }
+    ImGui::SameLine();
+    HelpMarker(trc("settings.tooltip.limit_capture_framerate"));
 
     ImGui::Spacing();
     ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));
@@ -65,26 +88,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
 
     ImGui::Spacing();
     ImGui::SeparatorText(trc("settings.mirrors"));
-    {
-        const char* gammaModes[] = { trc("settings.mirrors_auto"), trc("settings.mirrors_assume_srgb"), trc("settings.mirrors_assume_linear") };
-        int gm = static_cast<int>(g_config.mirrorGammaMode);
-        ImGui::SetNextItemWidth(250);
-        if (ImGui::Combo(trc("settings.mirrors_match_colorspace"), &gm, gammaModes, IM_ARRAYSIZE(gammaModes))) {
-            g_config.mirrorGammaMode = static_cast<MirrorGammaMode>(gm);
-            g_configIsDirty = true;
-
-            SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
-
-            std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-            for (auto& kv : g_mirrorInstances) {
-                kv.second.forceUpdateFrames = 3;
-                kv.second.hasValidContent = false;
-            }
-        }
-        ImGui::SameLine();
-        HelpMarker(trc("settings.tooltip.colorspace"));
-    }
-
     bool driverInstalled = IsVirtualCameraDriverInstalled();
     bool inUseByOBS = driverInstalled && IsVirtualCameraInUseByOBS();
     ImGui::BeginDisabled(!driverInstalled || inUseByOBS);
@@ -93,17 +96,16 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
         g_config.debug.virtualCameraEnabled = vcEnabled;
         g_configIsDirty = true;
         if (vcEnabled) {
-            int screenW = GetCachedWindowWidth();
-            int screenH = GetCachedWindowHeight();
-            if (screenW <= 0 || screenH <= 0) {
-                screenW = GetSystemMetrics(SM_CXSCREEN);
-                screenH = GetSystemMetrics(SM_CYSCREEN);
+            uint32_t vcWidth = 0;
+            uint32_t vcHeight = 0;
+            if (GetPreferredVirtualCameraResolution(vcWidth, vcHeight)) {
+                StartVirtualCamera(vcWidth, vcHeight);
             }
-            StartVirtualCamera(screenW, screenH);
         } else {
             StopVirtualCamera();
         }
     }
+
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (!driverInstalled) {
@@ -125,6 +127,9 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
             memset(s_passcodeInput, 0, sizeof(s_passcodeInput));
         }
 
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing,
+                                ImVec2(0.5f, 0.5f));
         if (ImGui::BeginPopupModal(trc("settings.debug_passcode"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text(trc("settings.debug_passcode_prompt"));
             ImGui::Spacing();
@@ -150,12 +155,11 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
         }
     } else {
         ImGui::SeparatorText(trc("settings.debug_options"));
+        drawMirrorColorspaceSetting();
+        ImGui::Spacing();
         if (ImGui::Checkbox(trc("settings.delay_rendering_until_finished"), &g_config.debug.delayRenderingUntilFinished)) { g_configIsDirty = true; }
         ImGui::SameLine();
         HelpMarker(trc("settings.tooltip.delay_rendering_until_finished"));
-        if (ImGui::Checkbox(trc("settings.delay_rendering_until_blitted"), &g_config.debug.delayRenderingUntilBlitted)) { g_configIsDirty = true; }
-        ImGui::SameLine();
-        HelpMarker(trc("settings.tooltip.delay_rendering_until_blitted"));
         ImGui::Spacing();
         if (ImGui::Checkbox(trc("settings.show_performance_overlay"), &g_config.debug.showPerformanceOverlay)) { g_configIsDirty = true; }
         if (ImGui::Checkbox(trc("settings.show_profiler"), &g_config.debug.showProfiler)) { g_configIsDirty = true; }

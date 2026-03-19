@@ -92,6 +92,36 @@ static std::string PtrToHex(const void* p) {
     return ss.str();
 }
 
+static bool IsReadableCodePtr(const void* addr) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+    if (mbi.State != MEM_COMMIT) return false;
+    DWORD prot = mbi.Protect & 0xFF;
+    return prot == PAGE_EXECUTE || prot == PAGE_EXECUTE_READ || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY ||
+           prot == PAGE_READONLY || prot == PAGE_READWRITE || prot == PAGE_WRITECOPY;
+}
+
+static bool IsAbsoluteJumpStub(const uint8_t* bytes) {
+    if (!bytes) return false;
+    return (bytes[0] == 0xEB) || (bytes[0] == 0xE9) || (bytes[0] == 0xFF && bytes[1] == 0x25) ||
+           (bytes[0] == 0x48 && bytes[1] == 0xB8 && bytes[10] == 0xFF && bytes[11] == 0xE0) ||
+           (bytes[0] == 0x49 && bytes[1] == 0xBB && bytes[10] == 0x41 && bytes[11] == 0xFF && bytes[12] == 0xE3);
+}
+
+static std::wstring ToLowerWide(std::wstring value) {
+    for (wchar_t& ch : value) ch = static_cast<wchar_t>(towlower(ch));
+    return value;
+}
+
+static bool ContainsAnySubstring(const std::wstring& haystack, std::initializer_list<const wchar_t*> needles) {
+    for (const wchar_t* needle : needles) {
+        if (needle && haystack.find(needle) != std::wstring::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static std::wstring GetFileVersionStringValue(const std::wstring& filePath, const wchar_t* key) {
     if (filePath.empty() || !key) return L"";
 
@@ -167,51 +197,117 @@ static bool GetOwnerInfoForAddress(const void* addr, HookChainOwnerInfo& out) {
     return true;
 }
 
+static bool IsExplicitlyAllowedThirdPartyHookOwner(const HookChainOwnerInfo& ownerInfo) {
+    const std::wstring ownerNameLower = ToLowerWide(ownerInfo.name);
+    const std::wstring ownerCompanyLower = ToLowerWide(ownerInfo.company);
+    const std::wstring ownerProductLower = ToLowerWide(ownerInfo.product);
+    const std::wstring ownerDescriptionLower = ToLowerWide(ownerInfo.description);
+    const std::wstring ownerPathLower = ToLowerWide(ownerInfo.path);
+
+    const bool isToolscreen = ownerNameLower == L"toolscreen.dll" || ContainsAnySubstring(ownerPathLower, { L"\\toolscreen.dll" });
+
+    const bool isObs = ContainsAnySubstring(ownerPathLower, { L"graphics-hook", L"obs-studio" }) ||
+                       ContainsAnySubstring(ownerCompanyLower, { L"obs project", L"open broadcaster software" }) ||
+                       ContainsAnySubstring(ownerProductLower, { L"obs studio", L"obs-studio", L"open broadcaster software" }) ||
+                       ContainsAnySubstring(ownerDescriptionLower,
+                                            { L"graphics hook", L"graphics-hook", L"obs studio", L"obs-studio", L"open broadcaster software" });
+
+    const bool isDiscord = ContainsAnySubstring(ownerNameLower, { L"discord" }) ||
+                           ContainsAnySubstring(ownerPathLower, { L"discord" }) ||
+                           ContainsAnySubstring(ownerCompanyLower, { L"discord" }) ||
+                           ContainsAnySubstring(ownerProductLower, { L"discord" }) ||
+                           ContainsAnySubstring(ownerDescriptionLower, { L"discord" });
+
+    return isToolscreen || isObs || isDiscord;
+}
+
+static bool IsAddressInSet(const void* addr, std::initializer_list<const void*> addrs) {
+    for (const void* candidate : addrs) {
+        if (candidate && addr == candidate) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool TryResolveJumpTarget(void* cur, void*& next) {
+    next = nullptr;
+    if (!cur || !IsReadableCodePtr(cur)) return false;
+
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(cur);
+
+    if (b[0] == 0xEB) {
+        int8_t rel = *reinterpret_cast<const int8_t*>(b + 1);
+        next = const_cast<uint8_t*>(b + 2 + rel);
+    } else if (b[0] == 0xE9) {
+        int32_t rel = *reinterpret_cast<const int32_t*>(b + 1);
+        next = const_cast<uint8_t*>(b + 5 + rel);
+    } else if (b[0] == 0xFF && b[1] == 0x25) {
+        int32_t disp = *reinterpret_cast<const int32_t*>(b + 2);
+        const uint8_t* ripNext = b + 6;
+        const uint8_t* slot = ripNext + disp;
+        if (!IsReadableCodePtr(slot)) return false;
+        next = *reinterpret_cast<void* const*>(slot);
+    } else if (b[0] == 0x48 && b[1] == 0xB8 && b[10] == 0xFF && b[11] == 0xE0) {
+        next = *reinterpret_cast<void* const*>(b + 2);
+    } else if (b[0] == 0x49 && b[1] == 0xBB && b[10] == 0x41 && b[11] == 0xFF && b[12] == 0xE3) {
+        next = *reinterpret_cast<void* const*>(b + 2);
+    }
+
+    return next != nullptr;
+}
+
+static void* ResolveFirstAllowedThirdPartyHookTarget(void* start, bool allowDirectStart, std::initializer_list<const void*> excludedTargets) {
+    if (!start) return nullptr;
+
+    void* cur = start;
+    for (int depth = 0; depth < 16; depth++) {
+        if (!cur) return nullptr;
+
+        if (allowDirectStart || depth > 0) {
+            if (!IsAddressInSet(cur, excludedTargets) && HookChain::IsAllowedThirdPartyHookAddress(cur)) {
+                return cur;
+            }
+        }
+
+        if (!IsReadableCodePtr(cur)) return nullptr;
+        if (!IsAbsoluteJumpStub(reinterpret_cast<const uint8_t*>(cur))) return nullptr;
+
+        void* next = nullptr;
+        if (!TryResolveJumpTarget(cur, next)) return nullptr;
+
+        if (IsAddressInSet(next, excludedTargets)) {
+            return nullptr;
+        }
+
+        cur = next;
+    }
+
+    return nullptr;
+}
+
+static void LogSkippedDisallowedHookTarget(const char* apiName, void* startAddress, void* skippedTarget) {
+    if (!apiName || !startAddress || !skippedTarget) return;
+
+    HookChainOwnerInfo ownerInfo{};
+    if (!GetOwnerInfoForAddress(skippedTarget, ownerInfo)) return;
+    if (IsExplicitlyAllowedThirdPartyHookOwner(ownerInfo)) return;
+
+    LogCategory("hookchain",
+                std::string("[") + apiName + "] ignoring non-allowlisted hook target start=" +
+                    HookChain::DescribeAddressWithOwner(startAddress) + " target=" + HookChain::DescribeAddressWithOwner(skippedTarget));
+}
+
 static void* ResolveAbsoluteJumpTarget(void* p) {
     if (!p) return nullptr;
 
-    auto isReadableCodePtr = [](const void* addr) -> bool {
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-        if (mbi.State != MEM_COMMIT) return false;
-        DWORD prot = mbi.Protect & 0xFF;
-        return prot == PAGE_EXECUTE || prot == PAGE_EXECUTE_READ || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY ||
-               prot == PAGE_READONLY || prot == PAGE_READWRITE || prot == PAGE_WRITECOPY;
-    };
-
     void* cur = p;
     for (int depth = 0; depth < 8; depth++) {
-        if (!isReadableCodePtr(cur)) return nullptr;
-        const uint8_t* b = reinterpret_cast<const uint8_t*>(cur);
-
         void* next = nullptr;
 
-        if (b[0] == 0xEB) {
-            int8_t rel = *reinterpret_cast<const int8_t*>(b + 1);
-            next = const_cast<uint8_t*>(b + 2 + rel);
-        } else if (b[0] == 0xE9) {
-            int32_t rel = *reinterpret_cast<const int32_t*>(b + 1);
-            next = const_cast<uint8_t*>(b + 5 + rel);
-        } else if (b[0] == 0xFF && b[1] == 0x25) {
-            int32_t disp = *reinterpret_cast<const int32_t*>(b + 2);
-            const uint8_t* ripNext = b + 6;
-            const uint8_t* slot = ripNext + disp;
-            if (!isReadableCodePtr(slot)) return nullptr;
-            next = *reinterpret_cast<void* const*>(slot);
-        } else if (b[0] == 0x48 && b[1] == 0xB8 && b[10] == 0xFF && b[11] == 0xE0) {
-            next = *reinterpret_cast<void* const*>(b + 2);
-        } else if (b[0] == 0x49 && b[1] == 0xBB && b[10] == 0x41 && b[11] == 0xFF && b[12] == 0xE3) {
-            next = *reinterpret_cast<void* const*>(b + 2);
-        }
-
-        if (!next) return nullptr;
-
-        if (!isReadableCodePtr(next)) return next;
-        const uint8_t* nb = reinterpret_cast<const uint8_t*>(next);
-        bool looksLikeJump = (nb[0] == 0xEB) || (nb[0] == 0xE9) || (nb[0] == 0xFF && nb[1] == 0x25) ||
-                             (nb[0] == 0x48 && nb[1] == 0xB8 && nb[10] == 0xFF && nb[11] == 0xE0) ||
-                             (nb[0] == 0x49 && nb[1] == 0xBB && nb[10] == 0x41 && nb[11] == 0xFF && nb[12] == 0xE3);
-        if (!looksLikeJump) return next;
+        if (!TryResolveJumpTarget(cur, next)) return nullptr;
+        if (!IsReadableCodePtr(next)) return next;
+        if (!IsAbsoluteJumpStub(reinterpret_cast<const uint8_t*>(next))) return next;
 
         cur = next;
     }
@@ -223,18 +319,9 @@ static void* TraceAbsoluteJumpTarget(void* p, std::vector<std::string>& outTrace
     outTraceLines.clear();
     if (!p) return nullptr;
 
-    auto isReadableCodePtr = [](const void* addr) -> bool {
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
-        if (mbi.State != MEM_COMMIT) return false;
-        DWORD prot = mbi.Protect & 0xFF;
-        return prot == PAGE_EXECUTE || prot == PAGE_EXECUTE_READ || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY ||
-               prot == PAGE_READONLY || prot == PAGE_READWRITE || prot == PAGE_WRITECOPY;
-    };
-
     void* cur = p;
     for (int depth = 0; depth < 16; depth++) {
-        if (!isReadableCodePtr(cur)) {
+        if (!IsReadableCodePtr(cur)) {
             outTraceLines.push_back("depth=" + std::to_string(depth) + " unreadable @" + PtrToHex(cur));
             return nullptr;
         }
@@ -255,7 +342,7 @@ static void* TraceAbsoluteJumpTarget(void* p, std::vector<std::string>& outTrace
             int32_t disp = *reinterpret_cast<const int32_t*>(b + 2);
             const uint8_t* ripNext = b + 6;
             const uint8_t* slot = ripNext + disp;
-            if (!isReadableCodePtr(slot)) {
+            if (!IsReadableCodePtr(slot)) {
                 outTraceLines.push_back(std::string("depth=") + std::to_string(depth) + " rip-slot unreadable @" + PtrToHex(slot));
                 return nullptr;
             }
@@ -277,12 +364,8 @@ static void* TraceAbsoluteJumpTarget(void* p, std::vector<std::string>& outTrace
         outTraceLines.push_back(std::string("depth=") + std::to_string(depth) + " " + kind + " " + HookChain::DescribeAddressWithOwner(cur) +
                                 " -> " + HookChain::DescribeAddressWithOwner(next));
 
-        if (!isReadableCodePtr(next)) return next;
-        const uint8_t* nb = reinterpret_cast<const uint8_t*>(next);
-        bool looksLikeJump = (nb[0] == 0xEB) || (nb[0] == 0xE9) || (nb[0] == 0xFF && nb[1] == 0x25) ||
-                             (nb[0] == 0x48 && nb[1] == 0xB8 && nb[10] == 0xFF && nb[11] == 0xE0) ||
-                             (nb[0] == 0x49 && nb[1] == 0xBB && nb[10] == 0x41 && nb[11] == 0xFF && nb[12] == 0xE3);
-        if (!looksLikeJump) return next;
+        if (!IsReadableCodePtr(next)) return next;
+        if (!IsAbsoluteJumpStub(reinterpret_cast<const uint8_t*>(next))) return next;
         cur = next;
     }
 
@@ -294,8 +377,7 @@ static void LogHookChainDetails(const char* apiName, void* startAddress, void* r
     if (!apiName) apiName = "(unknown api)";
     if (!reason) reason = "(unspecified)";
 
-    const char* mode =
-        (g_config.hookChainingNextTarget == HookChainingNextTarget::OriginalFunction) ? "OriginalFunction" : "LatestHook";
+    const char* mode = "LatestHook";
 
     LogCategory("hookchain",
                 std::string("[") + apiName + "] chain-detect reason=" + reason + " nextTarget=" + mode + " start=" +
@@ -364,7 +446,15 @@ static void RefreshThirdPartyViewportHookChain() {
     void* exportViewport = reinterpret_cast<void*>(GetProcAddress(hOpenGL32, "glViewport"));
     if (!exportViewport) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(exportViewport);
+    void* observedTarget = ResolveAbsoluteJumpTarget(exportViewport);
+    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+        LogSkippedDisallowedHookTarget("glViewport", exportViewport, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        exportViewport,
+        false,
+        { reinterpret_cast<void*>(&hkglViewport), reinterpret_cast<void*>(&hkglViewport_Driver), reinterpret_cast<void*>(&hkglViewport_ThirdParty) });
     if (!jumpTarget) return;
 
     if (jumpTarget == reinterpret_cast<void*>(&hkglViewport) || jumpTarget == reinterpret_cast<void*>(&hkglViewport_Driver) ||
@@ -395,7 +485,15 @@ static void RefreshThirdPartyViewportHookChainFromDriverTarget() {
     void* driverTarget = g_glViewportDriverHookTarget.load(std::memory_order_acquire);
     if (!driverTarget) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(driverTarget);
+    void* observedTarget = ResolveAbsoluteJumpTarget(driverTarget);
+    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+        LogSkippedDisallowedHookTarget("glViewport", driverTarget, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        driverTarget,
+        false,
+        { reinterpret_cast<void*>(&hkglViewport), reinterpret_cast<void*>(&hkglViewport_Driver), reinterpret_cast<void*>(&hkglViewport_ThirdParty) });
     if (!jumpTarget) return;
 
     if (jumpTarget == reinterpret_cast<void*>(&hkglViewport) || jumpTarget == reinterpret_cast<void*>(&hkglViewport_Driver) ||
@@ -426,10 +524,26 @@ static void RefreshThirdPartyWglSwapBuffersHookChain() {
     void* exportSwap = reinterpret_cast<void*>(GetProcAddress(hOpenGL32, "wglSwapBuffers"));
     if (!exportSwap) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(exportSwap);
+    void* observedTarget = ResolveAbsoluteJumpTarget(exportSwap);
+    const bool sawDisallowedOuterHook = observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget);
+    if (sawDisallowedOuterHook) {
+        LogSkippedDisallowedHookTarget("wglSwapBuffers", exportSwap, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        exportSwap,
+        false,
+        { reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty) });
+    if (!jumpTarget) {
+        jumpTarget = observedTarget;
+    }
     if (!jumpTarget) return;
 
-    if (jumpTarget == reinterpret_cast<void*>(&hkwglSwapBuffers) || jumpTarget == reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty)) {
+    if (jumpTarget == reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkwglSwapBuffers) && !sawDisallowedOuterHook) {
         return;
     }
 
@@ -440,7 +554,9 @@ static void RefreshThirdPartyWglSwapBuffersHookChain() {
     if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty),
                                           reinterpret_cast<void**>(&g_owglSwapBuffersThirdParty), "wglSwapBuffers (third-party chain)")) {
         g_wglSwapBuffersThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        LogHookChainDetails("wglSwapBuffers", exportSwap, jumpTarget, "export detour (prolog)");
+        LogHookChainDetails("wglSwapBuffers", exportSwap, jumpTarget,
+                            sawDisallowedOuterHook && jumpTarget == observedTarget ? "export detour (transport fallback)"
+                                                                                   : "export detour (prolog)");
         Log("Chained wglSwapBuffers through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
     }
 }
@@ -454,7 +570,15 @@ static void RefreshThirdPartySetCursorPosHookChain() {
     void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "SetCursorPos"));
     if (!exportFunc) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+        LogSkippedDisallowedHookTarget("SetCursorPos", exportFunc, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        exportFunc,
+        false,
+        { reinterpret_cast<void*>(&hkSetCursorPos), reinterpret_cast<void*>(&hkSetCursorPos_ThirdParty) });
     if (!jumpTarget) return;
 
     if (jumpTarget == reinterpret_cast<void*>(&hkSetCursorPos) || jumpTarget == reinterpret_cast<void*>(&hkSetCursorPos_ThirdParty)) {
@@ -482,7 +606,15 @@ static void RefreshThirdPartyClipCursorHookChain() {
     void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "ClipCursor"));
     if (!exportFunc) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+        LogSkippedDisallowedHookTarget("ClipCursor", exportFunc, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        exportFunc,
+        false,
+        { reinterpret_cast<void*>(&hkClipCursor), reinterpret_cast<void*>(&hkClipCursor_ThirdParty) });
     if (!jumpTarget) return;
 
     if (jumpTarget == reinterpret_cast<void*>(&hkClipCursor) || jumpTarget == reinterpret_cast<void*>(&hkClipCursor_ThirdParty)) {
@@ -510,7 +642,15 @@ static void RefreshThirdPartySetCursorHookChain() {
     void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "SetCursor"));
     if (!exportFunc) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+        LogSkippedDisallowedHookTarget("SetCursor", exportFunc, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        exportFunc,
+        false,
+        { reinterpret_cast<void*>(&hkSetCursor), reinterpret_cast<void*>(&hkSetCursor_ThirdParty) });
     if (!jumpTarget) return;
 
     if (jumpTarget == reinterpret_cast<void*>(&hkSetCursor) || jumpTarget == reinterpret_cast<void*>(&hkSetCursor_ThirdParty)) {
@@ -538,7 +678,15 @@ static void RefreshThirdPartyGetRawInputDataHookChain() {
     void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "GetRawInputData"));
     if (!exportFunc) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+        LogSkippedDisallowedHookTarget("GetRawInputData", exportFunc, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        exportFunc,
+        false,
+        { reinterpret_cast<void*>(&hkGetRawInputData), reinterpret_cast<void*>(&hkGetRawInputData_ThirdParty) });
     if (!jumpTarget) return;
 
     if (jumpTarget == reinterpret_cast<void*>(&hkGetRawInputData) || jumpTarget == reinterpret_cast<void*>(&hkGetRawInputData_ThirdParty)) {
@@ -566,7 +714,15 @@ static void RefreshThirdPartyGlfwSetInputModeHookChain() {
     void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hGlfw, "glfwSetInputMode"));
     if (!exportFunc) return;
 
-    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+        LogSkippedDisallowedHookTarget("glfwSetInputMode", exportFunc, observedTarget);
+    }
+
+    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        exportFunc,
+        false,
+        { reinterpret_cast<void*>(&hkglfwSetInputMode), reinterpret_cast<void*>(&hkglfwSetInputMode_ThirdParty) });
     if (!jumpTarget) return;
 
     if (jumpTarget == reinterpret_cast<void*>(&hkglfwSetInputMode) || jumpTarget == reinterpret_cast<void*>(&hkglfwSetInputMode_ThirdParty)) {
@@ -603,11 +759,36 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
         HMODULE m = mods[i];
         if (!m) continue;
 
+        if (m == opengl32) continue;
+
         void* thunkTarget = FindIatImportedFunctionTarget(m, "opengl32.dll", "wglSwapBuffers");
         if (!thunkTarget) continue;
 
-        if (thunkTarget == exportSwap || thunkTarget == reinterpret_cast<void*>(&hkwglSwapBuffers) ||
-            thunkTarget == reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty)) {
+        if (!HookChain::IsAllowedThirdPartyHookAddress(thunkTarget)) {
+            void* observedTarget = ResolveAbsoluteJumpTarget(thunkTarget);
+            if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+                LogSkippedDisallowedHookTarget("wglSwapBuffers", thunkTarget, observedTarget);
+            } else {
+                LogSkippedDisallowedHookTarget("wglSwapBuffers", thunkTarget, thunkTarget);
+            }
+        }
+
+        void* allowedTarget = ResolveFirstAllowedThirdPartyHookTarget(
+            thunkTarget,
+            true,
+            { reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty) });
+        if (allowedTarget) {
+            thunkTarget = allowedTarget;
+        } else {
+            void* observedTarget = ResolveAbsoluteJumpTarget(thunkTarget);
+            if (observedTarget) {
+                thunkTarget = observedTarget;
+            } else if (!HookChain::IsAllowedThirdPartyHookAddress(thunkTarget)) {
+                continue;
+            }
+        }
+
+        if (thunkTarget == exportSwap || thunkTarget == reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty)) {
             continue;
         }
 
@@ -630,6 +811,23 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
 
 namespace HookChain {
 
+bool IsAllowedThirdPartyHookAddress(const void* addr) {
+    HookChainOwnerInfo ownerInfo{};
+    if (!GetOwnerInfoForAddress(addr, ownerInfo)) return false;
+    return IsExplicitlyAllowedThirdPartyHookOwner(ownerInfo);
+}
+
+    bool HasAllowedThirdPartyHookOnStack(unsigned skipFrames) {
+        void* stack[32] = {};
+        const USHORT frames = CaptureStackBackTrace(1 + skipFrames, static_cast<DWORD>(std::size(stack)), stack, NULL);
+        for (USHORT i = 0; i < frames; ++i) {
+            if (IsAllowedThirdPartyHookAddress(stack[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, const char* what) {
     if (!target) return false;
 
@@ -641,6 +839,12 @@ bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, cons
 
     st = MH_EnableHook(target);
     if (st != MH_OK && st != MH_ERROR_ENABLED) {
+        if ((int)st == 11) {
+            MH_RemoveHook(target);
+            Log(std::string("INFO: Skipping ") + (what ? what : "(hook)") +
+                " hook because the target is not safely patchable by MinHook (status " + std::to_string((int)st) + ")");
+            return false;
+        }
         Log(std::string("ERROR: Failed to enable ") + (what ? what : "(hook)") + " hook (status " + std::to_string((int)st) + ")");
         return false;
     }

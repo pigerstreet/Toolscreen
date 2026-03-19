@@ -141,7 +141,33 @@ if (ImGui::BeginTabItem(trc("tabs.other"))) {
 
     ImGui::Text(trc("label.font_path"));
     ImGui::SetNextItemWidth(300);
-    if (ImGui::InputText("##FontPath", &g_config.fontPath)) { g_configIsDirty = true; }
+    if (ImGui::InputText("##FontPath", &g_config.fontPath)) {
+        g_configIsDirty = true;
+        RequestDynamicGuiFontRefresh(true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button((tr("button.browse") + "##MainGuiFont").c_str())) {
+        OPENFILENAMEA ofn = {};
+        char szFile[MAX_PATH] = {};
+
+        if (!g_config.fontPath.empty()) { strncpy_s(szFile, g_config.fontPath.c_str(), MAX_PATH - 1); }
+
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = g_minecraftHwnd.load();
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "Font Files (*.ttf;*.otf)\0*.ttf;*.otf\0All Files (*.*)\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrTitle = "Select Main GUI Font";
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+        ofn.lpstrInitialDir = "C:\\Windows\\Fonts";
+
+        if (GetOpenFileNameA(&ofn)) {
+            g_config.fontPath = szFile;
+            g_configIsDirty = true;
+            RequestDynamicGuiFontRefresh(true);
+        }
+    }
     ImGui::SameLine();
     HelpMarker(trc("tooltip.font"));
 

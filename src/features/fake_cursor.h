@@ -46,6 +46,7 @@ bool GetCursorPathByName(const std::string& cursorName, std::wstring& outPath, U
 bool IsCursorFileValid(const std::string& cursorName);
 
 void InitializeCursorDefinitions();
+void RefreshCursorDefinitions();
 
 std::vector<std::string> GetAvailableCursorNames();
 }

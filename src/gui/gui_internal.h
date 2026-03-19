@@ -65,6 +65,8 @@ void RawInputSensitivityNote();
 bool IsHotkeyBindingActive_UiState();
 bool Spinner(const char* id_label, int* v, int step = 1, int min_val = INT_MIN, int max_val = INT_MAX, float inputWidth = 80.0f,
              float margin = 0.0f);
+bool SpinnerDeferredTextInput(const char* id_label, int* v, int step = 1, int min_val = INT_MIN, int max_val = INT_MAX,
+                              float inputWidth = 80.0f, float margin = 0.0f);
 bool SpinnerFloat(const char* id_label, float* v, float step = 0.1f, float min_val = 0.0f, float max_val = FLT_MAX,
                   const char* format = "%.1f");
 void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, const std::string& idSuffix);
@@ -73,6 +75,7 @@ bool HasDuplicateModeName(const std::string& name, size_t currentIndex);
 bool HasDuplicateMirrorName(const std::string& name, size_t currentIndex);
 bool HasDuplicateImageName(const std::string& name, size_t currentIndex);
 bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex);
+bool HasDuplicateBrowserOverlayName(const std::string& name, size_t currentIndex);
 bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex);
 EyeZoomConfig GetDefaultEyeZoomConfig();
 
@@ -87,6 +90,7 @@ std::vector<MirrorConfig> GetDefaultMirrors();
 std::vector<MirrorGroupConfig> GetDefaultMirrorGroups();
 std::vector<ImageConfig> GetDefaultImages();
 std::vector<WindowOverlayConfig> GetDefaultWindowOverlays();
+std::vector<BrowserOverlayConfig> GetDefaultBrowserOverlays();
 std::vector<HotkeyConfig> GetDefaultHotkeys();
 CursorsConfig GetDefaultCursors();
 bool HasDuplicateMirrorGroupName(const std::string& name, size_t currentIndex);

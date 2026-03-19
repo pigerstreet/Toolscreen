@@ -6,6 +6,7 @@
 #include <GL/glew.h>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
@@ -16,19 +17,22 @@
 
 struct MirrorInstance;
 
-// Thread runs independently, capturing game content to back-buffer FBOs
-
-// Is the mirror capture thread currently running
-extern std::atomic<bool> g_mirrorCaptureRunning;
-
-// Capture thread only captures while this is true - if it becomes false, capture is aborted
-extern std::atomic<bool> g_safeToCapture;
-
-// Updated by UpdateMirrorCaptureConfigs() (logic thread) and read by SwapBuffers hook to
+// Mirror capture resources and same-thread mirror compositing support.
 extern std::atomic<int> g_activeMirrorCaptureCount;
 
 // Maximum requested FPS among active mirrors (summary of ThreadedMirrorConfig::fps).
 extern std::atomic<int> g_activeMirrorCaptureMaxFps;
+
+constexpr int kMirrorRealtimeSliderValue = 500;
+constexpr int kMirrorRealtimeFps = 10000;
+
+inline bool IsMirrorRealtimeFps(int fps) {
+    return fps >= kMirrorRealtimeFps;
+}
+
+inline bool MirrorUsesEveryFrameUpdates(int fps) {
+    return fps <= 0 || IsMirrorRealtimeFps(fps);
+}
 
 // Named ThreadedMirrorConfig to avoid conflict with MirrorCaptureConfig in gui.h
 struct ThreadedMirrorConfig {
@@ -50,11 +54,14 @@ struct ThreadedMirrorConfig {
     int fps = 0;
     bool rawOutput = false;
     bool colorPassthrough = false;
+    bool gradientOutput = false;
+    GradientConfig gradient;
     std::vector<Color> targetColors;
     Color outputColor;
     Color borderColor;
     float colorSensitivity = 0.0f;
     std::vector<MirrorCaptureConfig> input;
+    uint64_t sourceRectLayoutHash = 0;
     std::chrono::steady_clock::time_point lastCaptureTime;
 
     float outputScale = 1.0f;
@@ -69,71 +76,15 @@ struct ThreadedMirrorConfig {
 extern std::vector<ThreadedMirrorConfig> g_threadedMirrorConfigs;
 extern std::mutex g_threadedMirrorConfigMutex;
 
-// Game state for capture thread (main thread writes, capture thread reads)
-extern std::atomic<int> g_captureGameW;
-extern std::atomic<int> g_captureGameH;
-extern std::atomic<GLuint> g_captureGameTexture;
-
-// Screen/viewport geometry for render cache computation (main thread writes, capture thread reads)
-extern std::atomic<int> g_captureScreenW;
-extern std::atomic<int> g_captureScreenH;
-extern std::atomic<int> g_captureFinalX;
-extern std::atomic<int> g_captureFinalY;
-extern std::atomic<int> g_captureFinalW;
-extern std::atomic<int> g_captureFinalH;
-
-// Frame capture notification - sent from SwapBuffers to mirror thread
-// SwapBuffers only creates fence - mirror thread does the actual GPU blit
-struct FrameCaptureNotification {
-    GLuint gameTextureId; // Game texture to copy from (mirror thread does the blit)
-    GLsync fence;         // Fence to wait on before reading game texture
-    int width;
-    int height;
-    int textureIndex; // Which copy texture (0 or 1) this notification refers to - fixes race condition
-};
-
-// Lock-free SPSC (Single Producer Single Consumer) ring buffer for capture notifications
-// This allows the render thread to push without any locking
-constexpr int CAPTURE_QUEUE_SIZE = 2; // Only need 1 pending frame (size must be power of 2)
-extern FrameCaptureNotification g_captureQueue[CAPTURE_QUEUE_SIZE];
-extern std::atomic<int> g_captureQueueHead; // Write index (render thread only)
-extern std::atomic<int> g_captureQueueTail; // Read index (capture thread only)
-
-// Lock-free queue operations (inline for performance)
-inline bool CaptureQueuePush(const FrameCaptureNotification& notif) {
-    int head = g_captureQueueHead.load(std::memory_order_relaxed);
-    int nextHead = (head + 1) % CAPTURE_QUEUE_SIZE;
-
-    if (nextHead == g_captureQueueTail.load(std::memory_order_acquire)) {
-        return false;
-    }
-
-    g_captureQueue[head] = notif;
-    g_captureQueueHead.store(nextHead, std::memory_order_release);
-    return true;
-}
-
-inline bool CaptureQueuePop(FrameCaptureNotification& notif) {
-    int tail = g_captureQueueTail.load(std::memory_order_relaxed);
-
-    if (tail == g_captureQueueHead.load(std::memory_order_acquire)) {
-        return false;
-    }
-
-    notif = g_captureQueue[tail];
-    g_captureQueueTail.store((tail + 1) % CAPTURE_QUEUE_SIZE, std::memory_order_release);
-    return true;
-}
-
-// Start the mirror capture thread (call from main thread after GPU init)
-// MUST be called from main thread where game context is current
-void StartMirrorCaptureThread(void* gameGLContext);
-
-// Stop the mirror capture thread
-void StopMirrorCaptureThread();
-
-// Call this from main render thread each frame
+// Call this from the current GL render path each frame.
 void SwapMirrorBuffers();
+
+// Render active mirror captures on the current GL thread using the mirror resources.
+// Returns true when at least one mirror produced a fresh front buffer during this call.
+bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>& activeMirrorConfigs, GLuint sourceTexture, int gameW,
+                                         int gameH, int screenW, int screenH, int finalX, int finalY, int finalW, int finalH);
+
+void BuildThreadedMirrorConfigs(const std::vector<MirrorConfig>& activeMirrors, std::vector<ThreadedMirrorConfig>& outConfigs);
 
 // Update capture configs from main thread (call when active mirrors change)
 void UpdateMirrorCaptureConfigs(const std::vector<MirrorConfig>& activeMirrors);
@@ -149,7 +100,8 @@ void UpdateMirrorGroupOutputPosition(const std::vector<std::string>& mirrorIds, 
 void UpdateMirrorInputRegions(const std::string& mirrorName, const std::vector<MirrorCaptureConfig>& inputRegions);
 
 void UpdateMirrorCaptureSettings(const std::string& mirrorName, int captureWidth, int captureHeight, const MirrorBorderConfig& border,
-                                 const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough);
+                                 const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough,
+                                 bool gradientOutput, const GradientConfig& gradient);
 
 // Invalidate cached mirror textures/state for mirrors that are no longer active in the current mode.
 void InvalidateMirrorTextureCaches(const std::vector<std::string>& mirrorNames);
@@ -158,29 +110,26 @@ void SetGlobalMirrorGammaMode(MirrorGammaMode mode);
 MirrorGammaMode GetGlobalMirrorGammaMode();
 
 void InitCaptureTexture(int width, int height);
+void EnsureCaptureTextureInitialized(int width, int height);
 void CleanupCaptureTexture();
 
-// Start async GPU blit to copy game texture (called from SwapBuffers, non-blocking)
-// The GPU executes the blit in background. Consumers call GetGameCopyTexture/Fence to access.
+// Copy the current game texture into the shared mirror capture textures.
 void SubmitFrameCapture(GLuint gameTexture, int width, int height);
 
-// These provide access to the copied game texture for render_thread/OBS to use
-// The copy is made by mirror thread (deferred from SwapBuffers)
+// These provide access to the copied game texture for OBS and other synchronous consumers.
 GLuint GetGameCopyTexture();
 
-// --- Ready Frame Accessors (for OBS render thread) ---
-// These return GUARANTEED COMPLETE frames - GPU fence has signaled, safe to read without waiting
-// Updated by mirror thread after fence signals, read by OBS without any fence wait
+// --- Ready Frame Accessors ---
+// These return the most recent completed copy and are safe to sample immediately.
 GLuint GetReadyGameTexture();
 int GetReadyGameWidth();
 int GetReadyGameHeight();
 
-// --- Fallback Frame Accessors (for render_thread when ready frame not available) ---
-// These return the last copy texture info, but require fence wait before use
+// --- Fallback Frame Accessors ---
+// These expose the latest copy metadata even if the ready frame was invalidated during resize.
 GLuint GetFallbackGameTexture();
 int GetFallbackGameWidth();
 int GetFallbackGameHeight();
-GLsync GetFallbackCopyFence();   // Fence to wait on before using fallback texture
 
 // No fence wait needed - this is a simple and reliable fallback
 GLuint GetSafeReadTexture();

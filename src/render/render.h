@@ -34,22 +34,23 @@ struct MirrorInstance;
 struct UserImageInstance;
 
 // Cached mirror render data to minimize lock contention
-// All border rendering is now done by mirror_thread - render_thread just blits finalTexture
+// All border rendering is done in the mirror capture pass before final composition.
 struct MirrorRenderData {
     GLuint texture;
     int tex_w, tex_h;
     const MirrorConfig* config;
-    // Pre-computed from render cache (populated by capture thread)
+    // Pre-computed from cached mirror geometry.
     float vertices[24];
     int outW, outH;
     bool cacheValid;
-    // GPU fence for cross-context synchronization - copied from instance during lock
+    // GPU fence copied from the mirror instance during collection.
     GLsync gpuFence;
     int screenX = 0;
     int screenY = 0;
     int screenW = 0;
     int screenH = 0;
     bool hasFrameContent = false;
+    bool useDynamicBorderComposite = false;
 };
 
 struct FilterShaderLocs {
@@ -58,6 +59,10 @@ struct FilterShaderLocs {
 
 struct RenderShaderLocs {
     GLint filterTexture, borderWidth, outputColor, borderColor, screenPixel;
+};
+
+struct RenderPassthroughShaderLocs {
+    GLint filterTexture, borderWidth, borderColor, screenPixel, opacity;
 };
 
 struct BackgroundShaderLocs {
@@ -70,11 +75,16 @@ struct SolidColorShaderLocs {
 };
 
 struct ImageRenderShaderLocs {
-    GLint imageTexture, enableColorKey, colorKey, sensitivity, opacity;
+    GLint imageTexture;
+    GLint enableColorKey;
+    GLint numColorKeys;
+    GLint colorKeys;
+    GLint sensitivities;
+    GLint opacity;
 };
 
 struct PassthroughShaderLocs {
-    GLint screenTexture, sourceRect;
+    GLint screenTexture, sourceRect, opacity;
 };
 
 #define MAX_GRADIENT_STOPS 8
@@ -93,6 +103,7 @@ struct GLState {
     GLint p;
     GLint t;
     GLint t0;
+    GLint t1;
     GLint ab;
     GLint va;
     GLint fb;
@@ -102,9 +113,14 @@ struct GLState {
     GLboolean be;
     GLboolean de;
     GLboolean sc;
+    GLboolean ce;
+    GLboolean ste;
     GLboolean srgb_enabled;
+    GLboolean depth_mask;
 
     GLint blend_src_rgb, blend_dst_rgb, blend_src_alpha, blend_dst_alpha;
+    GLint draw_buffer;
+    GLint read_buffer;
 
     GLint vp[4];
     GLint sb[4];
@@ -112,15 +128,11 @@ struct GLState {
     GLfloat cc[4];
     GLfloat lw;
     GLboolean color_mask[4];
-    GLint unpack_row_length;
-    GLint unpack_skip_pixels;
-    GLint unpack_skip_rows;
-    GLint pack_alignment;
-    GLint unpack_alignment;
 };
 
 extern GLuint g_filterProgram;
 extern GLuint g_renderProgram;
+extern GLuint g_renderPassthroughProgram;
 extern GLuint g_backgroundProgram;
 extern GLuint g_solidColorProgram;
 extern GLuint g_imageRenderProgram;
@@ -129,18 +141,20 @@ extern GLuint g_gradientProgram;
 
 extern FilterShaderLocs g_filterShaderLocs;
 extern RenderShaderLocs g_renderShaderLocs;
+extern RenderPassthroughShaderLocs g_renderPassthroughShaderLocs;
 extern BackgroundShaderLocs g_backgroundShaderLocs;
 extern SolidColorShaderLocs g_solidColorShaderLocs;
 extern ImageRenderShaderLocs g_imageRenderShaderLocs;
 extern PassthroughShaderLocs g_passthroughShaderLocs;
 extern GradientShaderLocs g_gradientShaderLocs;
 
-// --- Global GUI State for Render Thread ---
-// These atomics are set by main thread and read by render.cpp to populate FrameRenderRequest
+// --- Global GUI State for Rendering ---
+// These atomics are set by the main thread and read by render.cpp to populate SameThreadOverlayState.
 extern std::atomic<bool> g_shouldRenderGui;
 extern std::atomic<bool> g_showPerformanceOverlay;
 extern std::atomic<bool> g_showProfiler;
 extern std::atomic<bool> g_showEyeZoom;
+extern std::atomic<bool> g_eyeZoomFontNeedsReload;
 extern std::atomic<float> g_eyeZoomFadeOpacity;
 extern std::atomic<int> g_eyeZoomAnimatedViewportX;
 extern std::atomic<bool> g_isTransitioningFromEyeZoom;
@@ -148,7 +162,7 @@ extern std::atomic<bool> g_showTextureGrid;
 extern std::atomic<int> g_textureGridModeWidth;
 extern std::atomic<int> g_textureGridModeHeight;
 
-// Used by dllmain.cpp to pass snapshot texture to OBS render thread
+// Used by dllmain.cpp to pass the snapshot texture to OBS capture.
 GLuint GetEyeZoomSnapshotTexture();
 int GetEyeZoomSnapshotWidth();
 int GetEyeZoomSnapshotHeight();
@@ -191,6 +205,10 @@ extern GameViewportGeometry g_lastFrameGeometry;
 extern std::mutex g_geometryMutex;
 extern std::atomic<GLuint> g_cachedGameTextureId;
 
+extern std::string s_hoveredImageName;
+extern std::string s_draggedImageName;
+extern bool s_isDragging;
+
 enum class ResizeCorner;
 extern std::string s_hoveredWindowOverlayName;
 extern std::string s_draggedWindowOverlayName;
@@ -207,12 +225,13 @@ void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, c
 
 void DiscardAllGPUImages();
 void CleanupGPUResources();
+void ProcessPendingDecodedImages();
 void UploadDecodedImageToGPU(const DecodedImageData& imgData);
 void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData);
 void InitializeGPUResources();
 void CreateMirrorGPUResources(const MirrorConfig& conf);
 
-// Mirror Capture Thread functions are declared in mirror_thread.h
+// Mirror capture helpers are declared in mirror_thread.h
 
 void InvalidateConfigLookupCaches();
 
@@ -220,12 +239,22 @@ void RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, const GameVie
                    float modeOpacity = 1.0f, bool excludeOnlyOnMyScreen = false);
 void RenderImages(const std::vector<ImageConfig>& activeImages, int fullW, int fullH, float modeOpacity = 1.0f,
                   bool excludeOnlyOnMyScreen = false);
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
+                                  std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
+                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays,
+                                  std::vector<const BrowserOverlayConfig*>& outBrowserOverlays);
 void RenderMode(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, bool skipAnimation = false,
                 bool excludeOnlyOnMyScreen = false);
+bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH,
+                              bool skipAnimation = false);
+void CaptureSameThreadVirtualCameraBackbufferFrame(int sourceW, int sourceH, bool captureVirtualCameraFrame);
+void ResetSameThreadVirtualCameraCaptureState();
 void RenderModeWithOpacity(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, float opacity,
                            bool skipBackgroundClear = false);
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO);
-void handleEyeZoomMode(const GLState& s, float opacity = 1.0f, int animatedViewportX = -1);
+void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fullW, int fullH, float opacity = 1.0f,
+                       int animatedViewportX = -1, bool useSnapshot = false, GLuint preferredGameTexture = 0,
+                       int preferredGameW = 0, int preferredGameH = 0, const BorderConfig* cloneBorder = nullptr);
 void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, float scaleFactor);
 void SetOverlayTextFontSize(int sizePixels);
 
@@ -278,9 +307,5 @@ void RenderTextureGridOverlay(bool showTextureGrid, int modeWidth = 0, int modeH
 void RenderCachedTextureGridLabels();
 
 void GetAnimatedModePosition(int& outX, int& outY);
-
-// Wait for the async overlay blit fence to complete (for delayRenderingUntilBlitted setting)
-// Returns true if fence was waited on, false if no fence was pending
-bool WaitForOverlayBlitFence();
 
 

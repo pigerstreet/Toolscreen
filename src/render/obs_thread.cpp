@@ -1,7 +1,11 @@
 #include "obs_thread.h"
 #include "common/profiler.h"
-#include "render_thread.h"
+#include "gui/gui.h"
+#include "mirror_thread.h"
 #include "common/utils.h"
+
+#include <chrono>
+#include <cmath>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -28,11 +32,161 @@ static PFN_glBlitFramebuffer Real_glBlitFramebuffer = nullptr;
 
 static GLuint g_obsRedirectFBO = 0;
 static std::mutex g_obsHookMutex;
+static GLuint g_obsRedirectAttachedTexture = 0;
+static int g_obsRedirectAttachedWidth = 0;
+static int g_obsRedirectAttachedHeight = 0;
 
-static GLuint g_obsCaptureFBO = 0;
-static GLuint g_obsCaptureTexture = 0;
-static int g_obsCaptureWidth = 0;
-static int g_obsCaptureHeight = 0;
+struct ObsRedirectValidationEntry {
+    GLuint texture = 0;
+    int width = 0;
+    int height = 0;
+};
+
+static constexpr size_t OBS_REDIRECT_VALIDATION_CACHE_SIZE = 8;
+static ObsRedirectValidationEntry g_obsRedirectValidationCache[OBS_REDIRECT_VALIDATION_CACHE_SIZE]{};
+static size_t g_obsRedirectValidationCacheNext = 0;
+static std::atomic<uint64_t> g_obsNextTextureUpdateTickUs{ 0 };
+static std::atomic<uint64_t> g_obsLastGameCaptureSampleTickUs{ 0 };
+static std::atomic<uint64_t> g_obsSmoothedGameCaptureIntervalUs{ 0 };
+
+static constexpr int OBS_TARGET_DEFAULT_FPS = 60;
+static constexpr int OBS_TARGET_MIN_FPS = 15;
+static constexpr int OBS_TARGET_MAX_FPS = 360;
+static constexpr int OBS_TARGET_HEADROOM_FPS = 1;
+static constexpr int OBS_LIMITED_TARGET_MIN_FPS = 60;
+static constexpr uint64_t OBS_TARGET_MIN_INTERVAL_US = 1000;
+static constexpr uint64_t OBS_TARGET_STALE_TIMEOUT_US = 2ull * 1000ull * 1000ull;
+
+static uint64_t GetObsSteadyNowUs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+static int ClampObsTargetFramerateValue(int value) {
+    if (value < OBS_TARGET_MIN_FPS) { return OBS_TARGET_MIN_FPS; }
+    if (value > OBS_TARGET_MAX_FPS) { return OBS_TARGET_MAX_FPS; }
+    return value;
+}
+
+static int RoundUpToNearestFive(int value) {
+    return ((value + 4) / 5) * 5;
+}
+
+static bool ShouldLimitObsCaptureFramerate() {
+    auto cfgSnapshot = GetConfigSnapshot();
+    if (!cfgSnapshot) { return ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE; }
+    return cfgSnapshot->limitCaptureFramerate;
+}
+
+static uint64_t BlendObsGameCaptureIntervalUs(uint64_t currentUs, uint64_t newUs) {
+    if (currentUs == 0) { return newUs; }
+    return ((currentUs * 3ull) + newUs) / 4ull;
+}
+
+static void RecordObsGameCaptureSample() {
+    const uint64_t nowUs = GetObsSteadyNowUs();
+    const uint64_t previousUs = g_obsLastGameCaptureSampleTickUs.exchange(nowUs, std::memory_order_acq_rel);
+    if (previousUs == 0 || nowUs <= previousUs) { return; }
+
+    const uint64_t intervalUs = nowUs - previousUs;
+    if (intervalUs < OBS_TARGET_MIN_INTERVAL_US) { return; }
+    if (intervalUs >= OBS_TARGET_STALE_TIMEOUT_US) {
+        g_obsSmoothedGameCaptureIntervalUs.store(0, std::memory_order_release);
+        return;
+    }
+
+    uint64_t expectedUs = g_obsSmoothedGameCaptureIntervalUs.load(std::memory_order_acquire);
+    for (;;) {
+        const uint64_t desiredUs = BlendObsGameCaptureIntervalUs(expectedUs, intervalUs);
+        if (g_obsSmoothedGameCaptureIntervalUs.compare_exchange_weak(expectedUs, desiredUs, std::memory_order_acq_rel,
+                                                                     std::memory_order_acquire)) {
+            return;
+        }
+    }
+}
+
+static int CalculateObsTargetFramerate(uint64_t intervalUs) {
+    if (intervalUs == 0) { return OBS_TARGET_DEFAULT_FPS; }
+
+    const double sampledFps = 1000000.0 / static_cast<double>(intervalUs);
+    const int fpsWithHeadroom = static_cast<int>(std::ceil(sampledFps + static_cast<double>(OBS_TARGET_HEADROOM_FPS)));
+    return ClampObsTargetFramerateValue(RoundUpToNearestFive(fpsWithHeadroom));
+}
+
+static int ApplyObsCaptureFramerateLimit(int targetFramerate) {
+    if (!ShouldLimitObsCaptureFramerate()) { return targetFramerate; }
+
+    const int halvedFramerate = RoundUpToNearestFive(static_cast<int>(std::ceil(static_cast<double>(targetFramerate) * 0.5)));
+    return ClampObsTargetFramerateValue((std::max)(OBS_LIMITED_TARGET_MIN_FPS, halvedFramerate));
+}
+
+static bool IsObsRedirectAttachmentValidated(GLuint texture, int width, int height) {
+    for (const auto& entry : g_obsRedirectValidationCache) {
+        if (entry.texture == texture && entry.width == width && entry.height == height) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void CacheObsRedirectAttachmentValidation(GLuint texture, int width, int height) {
+    g_obsRedirectValidationCache[g_obsRedirectValidationCacheNext] = { texture, width, height };
+    g_obsRedirectValidationCacheNext = (g_obsRedirectValidationCacheNext + 1) % OBS_REDIRECT_VALIDATION_CACHE_SIZE;
+}
+
+static void ClearObsRedirectAttachmentValidationCache() {
+    for (auto& entry : g_obsRedirectValidationCache) {
+        entry.texture = 0;
+        entry.width = 0;
+        entry.height = 0;
+    }
+    g_obsRedirectValidationCacheNext = 0;
+}
+
+bool ShouldUpdateObsTextureNow() {
+    const uint64_t nowUs = GetObsSteadyNowUs();
+    const int targetFramerate = GetObsTargetFramerate();
+    const uint64_t intervalUs = (1000000ull + static_cast<uint64_t>(targetFramerate) - 1ull) /
+                                static_cast<uint64_t>(targetFramerate);
+
+    uint64_t expectedUs = g_obsNextTextureUpdateTickUs.load(std::memory_order_acquire);
+    for (;;) {
+        if (expectedUs != 0 && nowUs < expectedUs) { return false; }
+
+        const uint64_t desiredUs = nowUs + intervalUs;
+        if (g_obsNextTextureUpdateTickUs.compare_exchange_weak(expectedUs, desiredUs, std::memory_order_acq_rel,
+                                                               std::memory_order_acquire)) {
+            return true;
+        }
+    }
+}
+
+int GetObsTargetFramerate() {
+    const uint64_t lastSampleUs = g_obsLastGameCaptureSampleTickUs.load(std::memory_order_acquire);
+    const uint64_t smoothedIntervalUs = g_obsSmoothedGameCaptureIntervalUs.load(std::memory_order_acquire);
+    if (lastSampleUs == 0 || smoothedIntervalUs == 0) { return ApplyObsCaptureFramerateLimit(OBS_TARGET_DEFAULT_FPS); }
+
+    const uint64_t nowUs = GetObsSteadyNowUs();
+    if (nowUs > lastSampleUs && (nowUs - lastSampleUs) >= OBS_TARGET_STALE_TIMEOUT_US) {
+        return ApplyObsCaptureFramerateLimit(OBS_TARGET_DEFAULT_FPS);
+    }
+
+    return ApplyObsCaptureFramerateLimit(CalculateObsTargetFramerate(smoothedIntervalUs));
+}
+
+void ResetObsTextureUpdateSchedule() {
+    g_obsNextTextureUpdateTickUs.store(0, std::memory_order_release);
+}
+
+static GLuint SelectObsRedirectTexture(GLsync& outFence, bool& outNeedsFenceWait) {
+    outFence = nullptr;
+    outNeedsFenceWait = false;
+
+    GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
+    if (overrideTexture != 0) { return overrideTexture; }
+
+    return 0;
+}
 
 static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                                             GLint dstY1, GLbitfield mask, GLenum filter) {
@@ -41,56 +195,67 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
 
         if (readFBO == 0) {
-            // First try the render thread's animated texture
-            GLuint obsTexture = GetCompletedObsTexture();
+            RecordObsGameCaptureSample();
 
-            // Fall back to the captured backbuffer texture if render thread texture isn't ready
-            if (obsTexture == 0) { obsTexture = g_obsOverrideTexture.load(std::memory_order_acquire); }
-
-            // mode transition because the render thread hasn't completed yet
-            if (obsTexture == 0) {
-                static bool s_firstFrameLogged = false;
-                for (int i = 0; i < 10 && obsTexture == 0; i++) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    obsTexture = GetCompletedObsTexture();
-                    if (obsTexture == 0) { obsTexture = g_obsOverrideTexture.load(std::memory_order_acquire); }
-                }
-                if (obsTexture != 0 && !s_firstFrameLogged) {
-                    s_firstFrameLogged = true;
-                }
-            }
+            GLsync obsFence = nullptr;
+            bool needsFenceWait = false;
+            GLuint obsTexture = SelectObsRedirectTexture(obsFence, needsFenceWait);
+            const GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
+            const bool usingOverrideTexture = (overrideTexture != 0 && obsTexture == overrideTexture);
+            const int overrideWidth = usingOverrideTexture ? g_obsOverrideWidth.load(std::memory_order_acquire) : 0;
+            const int overrideHeight = usingOverrideTexture ? g_obsOverrideHeight.load(std::memory_order_acquire) : 0;
+            const bool mustReattachOverride =
+                usingOverrideTexture &&
+                (g_obsRedirectAttachedTexture != obsTexture || g_obsRedirectAttachedWidth != overrideWidth ||
+                 g_obsRedirectAttachedHeight != overrideHeight);
 
             if (obsTexture != 0) {
                 PROFILE_SCOPE_CAT("OBS Capture Redirect", "OBS Hook");
 
-                // Wait on the render thread's fence to ensure texture is fully rendered
-                // glWaitSync is a GPU-side wait that doesn't block the CPU like glFinish
-                GLsync fence = GetCompletedObsFence();
-                if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
+                if (needsFenceWait && obsFence && glIsSync(obsFence)) { glWaitSync(obsFence, 0, GL_TIMEOUT_IGNORED); }
 
-                // Memory barrier to ensure we see the latest texture data from render thread
-                glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+                if (needsFenceWait) { glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT); }
 
-                if (g_obsRedirectFBO == 0) { glGenFramebuffers(1, &g_obsRedirectFBO); }
+                if (g_obsRedirectFBO == 0) {
+                    glGenFramebuffers(1, &g_obsRedirectFBO);
+                    g_obsRedirectAttachedTexture = 0;
+                }
 
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, g_obsRedirectFBO);
-                glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, obsTexture, 0);
+                if (g_obsRedirectAttachedTexture != obsTexture || mustReattachOverride) {
+                    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, obsTexture, 0);
 
-                GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
-                if (status != GL_FRAMEBUFFER_COMPLETE) {
-                    static GLenum lastLoggedStatus = GL_FRAMEBUFFER_COMPLETE;
-                    if (status != lastLoggedStatus) {
-                        Log("[OBS Hook] WARNING: Redirect FBO incomplete! Status: " + std::to_string(status) +
-                            ", Texture: " + std::to_string(obsTexture));
-                        lastLoggedStatus = status;
+                    if (!IsObsRedirectAttachmentValidated(obsTexture, overrideWidth, overrideHeight)) {
+                        GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+                        if (status != GL_FRAMEBUFFER_COMPLETE) {
+                            static GLenum lastLoggedStatus = GL_FRAMEBUFFER_COMPLETE;
+                            if (status != lastLoggedStatus) {
+                                Log("[OBS Hook] WARNING: Redirect FBO incomplete! Status: " + std::to_string(status) +
+                                    ", Texture: " + std::to_string(obsTexture));
+                                lastLoggedStatus = status;
+                            }
+                            g_obsRedirectAttachedTexture = 0;
+                            g_obsRedirectAttachedWidth = 0;
+                            g_obsRedirectAttachedHeight = 0;
+                            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+                            Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+                            return;
+                        }
+                        CacheObsRedirectAttachmentValidation(obsTexture, overrideWidth, overrideHeight);
                     }
-                    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-                    Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-                    return;
+
+                    g_obsRedirectAttachedTexture = obsTexture;
+                    g_obsRedirectAttachedWidth = overrideWidth;
+                    g_obsRedirectAttachedHeight = overrideHeight;
                 }
 
                 GLint blitSrcX0 = srcX0, blitSrcY0 = srcY0, blitSrcX1 = srcX1, blitSrcY1 = srcY1;
-                if (g_obsPre113Windowed.load(std::memory_order_acquire)) {
+                if (usingOverrideTexture && overrideWidth > 0 && overrideHeight > 0) {
+                    blitSrcX0 = 0;
+                    blitSrcY0 = 0;
+                    blitSrcX1 = overrideWidth;
+                    blitSrcY1 = overrideHeight;
+                } else if (g_obsPre113Windowed.load(std::memory_order_acquire)) {
                     int offsetX = g_obsPre113OffsetX.load(std::memory_order_acquire);
                     int offsetY = g_obsPre113OffsetY.load(std::memory_order_acquire);
                     blitSrcX0 = srcX0 + offsetX;
@@ -109,47 +274,22 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
     Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
-void CaptureBackbufferForObs(int width, int height) {
-    PROFILE_SCOPE_CAT("Capture Backbuffer for OBS", "OBS");
-
-    if (g_obsCaptureFBO == 0 || width != g_obsCaptureWidth || height != g_obsCaptureHeight) {
-        if (g_obsCaptureTexture != 0) { glDeleteTextures(1, &g_obsCaptureTexture); }
-        if (g_obsCaptureFBO == 0) { glGenFramebuffers(1, &g_obsCaptureFBO); }
-
-        glGenTextures(1, &g_obsCaptureTexture);
-        BindTextureDirect(GL_TEXTURE_2D, g_obsCaptureTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, g_obsCaptureFBO);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_obsCaptureTexture, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        BindTextureDirect(GL_TEXTURE_2D, 0);
-
-        g_obsCaptureWidth = width;
-        g_obsCaptureHeight = height;
-    }
-
-    GLint prevReadFBO = 0, prevDrawFBO = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_obsCaptureFBO);
-
+void ObsBlitFramebufferDirect(GLint srcX0,
+                              GLint srcY0,
+                              GLint srcX1,
+                              GLint srcY1,
+                              GLint dstX0,
+                              GLint dstY0,
+                              GLint dstX1,
+                              GLint dstY1,
+                              GLbitfield mask,
+                              GLenum filter) {
     if (Real_glBlitFramebuffer) {
-        Real_glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    } else {
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        return;
     }
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
-
-    SetObsOverrideTexture(g_obsCaptureTexture, width, height);
+    glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
 void SetObsOverrideTexture(GLuint texture, int width, int height) {
@@ -159,17 +299,21 @@ void SetObsOverrideTexture(GLuint texture, int width, int height) {
     g_obsOverrideEnabled.store(true, std::memory_order_release);
 }
 
-void ClearObsOverride() { g_obsOverrideEnabled.store(false, std::memory_order_release); }
+void ClearObsOverride() {
+    g_obsOverrideEnabled.store(false, std::memory_order_release);
+    g_obsOverrideTexture.store(0, std::memory_order_release);
+    g_obsOverrideWidth.store(0, std::memory_order_release);
+    g_obsOverrideHeight.store(0, std::memory_order_release);
+    ResetObsTextureUpdateSchedule();
+    g_obsRedirectAttachedTexture = 0;
+    g_obsRedirectAttachedWidth = 0;
+    g_obsRedirectAttachedHeight = 0;
+    ClearObsRedirectAttachmentValidationCache();
+}
 
 void EnableObsOverride() {
     if (g_obsHookActive.load(std::memory_order_acquire)) { g_obsOverrideEnabled.store(true, std::memory_order_release); }
 }
-
-GLuint GetObsCaptureTexture() { return g_obsCaptureTexture; }
-
-int GetObsCaptureWidth() { return g_obsCaptureWidth; }
-
-int GetObsCaptureHeight() { return g_obsCaptureHeight; }
 
 bool IsObsHookDetected() {
     return GetModuleHandleA("graphics-hook64.dll") != NULL;
@@ -227,7 +371,7 @@ void StartObsHookThread() {
     g_obsHookActive.store(true);
     g_obsHookInitialized.store(true);
 
-    // Enable the OBS override so the hook redirects captures to our render thread texture
+    // Enable the OBS override so the hook redirects captures to our composed override texture.
     g_obsOverrideEnabled.store(true, std::memory_order_release);
 
     Log("OBS Hook: Successfully hooked glBlitFramebuffer");
@@ -259,7 +403,10 @@ void StopObsHookThread() {
     if (g_obsRedirectFBO != 0) {
         glDeleteFramebuffers(1, &g_obsRedirectFBO);
         g_obsRedirectFBO = 0;
+        g_obsRedirectAttachedTexture = 0;
     }
+
+    ClearObsRedirectAttachmentValidationCache();
 
     g_obsHookInitialized.store(false);
     Log("OBS Hook: Stopped");
